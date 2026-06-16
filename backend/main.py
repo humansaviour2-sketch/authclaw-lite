@@ -34,7 +34,11 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # Create tables
+from sqlalchemy import text
 Base.metadata.create_all(bind=engine)
+with engine.connect() as conn:
+    conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_backup_codes VARCHAR[];"))
+    conn.commit()
 
 # Register Authentication & Tenant Context Middleware
 from app.core.auth import AuthMiddleware

@@ -50,6 +50,7 @@ class User(Base):
     )  # admin, operator, viewer
     mfa_enabled = Column(Boolean, default=False)
     mfa_secret = Column(String(32), nullable=True)  # TOTP secret (encrypted)
+    mfa_backup_codes = Column(ARRAY(String), nullable=True)  # TOTP backup codes
     is_active = Column(Boolean, default=True)
     last_login = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
@@ -192,6 +193,25 @@ class PendingApproval(Base):
         Index("idx_approval_tenant", "tenant_id"),
         Index("idx_approval_status", "status"),
         Index("idx_approval_expires", "expires_at"),
+    )
+
+
+class ApprovalAudit(Base):
+    """Immutable audit log of all approval decisions"""
+    __tablename__ = "approval_audit"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    approval_id = Column(UUID(as_uuid=True), ForeignKey("pending_approvals.id"), nullable=False)
+    actor_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    action = Column(String(50), nullable=False)  # APPROVED, REJECTED, EXPIRED
+    mfa_verified = Column(Boolean, default=False)
+    mfa_timestamp = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_approval_audit_tenant", "tenant_id"),
+        Index("idx_approval_audit_approval", "approval_id"),
     )
 
 

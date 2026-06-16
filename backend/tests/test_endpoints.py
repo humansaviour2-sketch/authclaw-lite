@@ -301,14 +301,14 @@ def test_tenant_creation_and_isolation(client: TestClient, db_session: Session):
     # Retrieve audit logs as Tenant B (isolated - returns empty list)
     response = client.get("/v1/audit-logs", headers=headers_b)
     assert response.status_code == status.HTTP_200_OK
-    assert len(response.json()) == 0
+    assert len(response.json()["records"]) == 0
 
     # Retrieve audit logs as Tenant A (returns Tenant A's logs)
     response = client.get("/v1/audit-logs", headers=headers_admin)
     assert response.status_code == status.HTTP_200_OK
-    assert len(response.json()) == 1
-    assert response.json()[0]["action"] == "policy_block"
-    assert "GDPR" in response.json()[0]["frameworks_affected"]
+    assert len(response.json()["records"]) == 1
+    assert response.json()["records"][0]["action"] == "policy_block"
+    assert "GDPR" in response.json()["records"][0]["frameworks_affected"]
 
 
 def test_workflow_approval_integration(client: TestClient, db_session: Session):
@@ -325,6 +325,7 @@ def test_workflow_approval_integration(client: TestClient, db_session: Session):
     db_session.add(tenant)
     db_session.commit()
 
+    db_session.execute(text(f"SET app.current_tenant_id = '{tenant_id}'"))
     user = User(id=user_id, tenant_id=tenant_id, email="admin@tenantC.com", role="admin", is_active=True)
     db_session.add(user)
     db_session.commit()
