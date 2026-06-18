@@ -63,6 +63,7 @@ from app.api.v1.endpoints.workflows import router as workflows_router
 from app.api.v1.endpoints.users import router as users_router
 from app.api.v1.endpoints.apikeys import router as apikeys_router
 from app.api.v1.endpoints.chat import router as chat_router
+from app.api.v1.endpoints.aws import router as aws_router
 
 app.include_router(tenants_router, prefix="/v1/tenants", tags=["tenants"])
 app.include_router(gateways_router, prefix="/v1/gateways", tags=["gateways"])
@@ -73,6 +74,8 @@ app.include_router(workflows_router, prefix="/v1/workflows", tags=["workflows"])
 app.include_router(users_router, prefix="/v1/users", tags=["users"])
 app.include_router(apikeys_router, prefix="/v1/api-keys", tags=["api-keys"])
 app.include_router(chat_router, prefix="/v1/chat", tags=["chat"])
+# Phase 14 — AWS Connector (gated behind AWS_ENABLED env flag at handler level)
+app.include_router(aws_router, prefix="/v1/aws", tags=["aws"])
 
 
 

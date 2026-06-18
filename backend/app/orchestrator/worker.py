@@ -1,7 +1,6 @@
 import logging
 import uuid
 from typing import Callable, Optional
-from app.orchestrator.connectors import AWSConnector, AzureConnector, GCPConnector
 
 logger = logging.getLogger("orchestrator.worker")
 
@@ -25,11 +24,7 @@ class EphemeralWorker:
         self.request_id = request_id
         self.emit_audit_fn = emit_audit_fn
         self.callback_fn = callback_fn
-        self.connectors = {
-            "aws": AWSConnector(),
-            "azure": AzureConnector(),
-            "gcp": GCPConnector(),
-        }
+        self.connectors = {}
 
     def _emit_audit(self, transition: str, action: str, status: str) -> None:
         if self.emit_audit_fn:

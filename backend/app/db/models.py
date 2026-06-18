@@ -307,3 +307,65 @@ class ChatMessage(Base):
         Index("idx_chatmessage_session", "session_id"),
     )
 
+
+# =============================================================================
+# Phase 14 — AWS Connector Framework
+# All tables below are new and additive. No existing model was modified.
+# =============================================================================
+
+class AWSUsageLimits(Base):
+    """Per-tenant Bedrock daily usage counters and hard limits.
+    
+    The Go Gateway reads this table BEFORE forwarding any Bedrock request.
+    If daily_requests >= max_daily_requests the request is blocked locally,
+    never reaching AWS, preventing runaway billing.
+    """
+    __tablename__ = "aws_usage_limits"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, unique=True)
+
+    # Running daily counters
+    daily_requests      = Column(Integer, nullable=False, default=0)
+    daily_tokens        = Column(Integer, nullable=False, default=0)
+    daily_cost_estimate = Column(Float, nullable=False, default=0.0)
+
+    # Configurable hard limits
+    max_daily_requests  = Column(Integer, nullable=False, default=100)
+    max_daily_tokens    = Column(Integer, nullable=False, default=50000)
+    max_daily_cost_usd  = Column(Float, nullable=False, default=1.0)
+
+    last_reset  = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at  = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_aws_usage_tenant", "tenant_id"),
+    )
+
+
+class AWSS3Document(Base):
+    """Metadata of S3 objects synced for a tenant.
+    
+    Populated by POST /v1/aws/s3/sync. Stores only metadata — no file content.
+    Used by Phase 15 RAG pipeline as its document inventory source.
+    """
+    __tablename__ = "aws_s3_documents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+
+    bucket_name     = Column(String(255), nullable=False)
+    object_key      = Column(Text, nullable=False)       # Full S3 key
+    file_name       = Column(String(512), nullable=False) # Basename
+    file_size_bytes = Column(Integer, nullable=True)
+    content_type    = Column(String(255), nullable=True)
+    last_modified   = Column(DateTime(timezone=True), nullable=True)
+    etag            = Column(String(255), nullable=True)   # S3 ETag for change detection
+    synced_at       = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_s3_docs_tenant", "tenant_id"),
+        Index("idx_s3_docs_synced", "synced_at"),
+        # Prevent duplicate keys per tenant+bucket
+        UniqueConstraint("tenant_id", "bucket_name", "object_key", name="uq_s3_doc_tenant_key"),
+    )

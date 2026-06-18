@@ -264,6 +264,10 @@ def _query_clickhouse(
     """
 
     try:
+        count_query = f"SELECT count(*) FROM authclaw.audit_events AS ae WHERE ae.tenant_id = {{tenant_id:UUID}} {action_filter}"
+        count_result = ch.query(count_query, parameters=params)
+        total_count = count_result.result_rows[0][0] if count_result.result_rows else 0
+
         result = ch.query(query, parameters=params)
     except Exception as exc:
         logger.error("ClickHouse query failed: %s", exc)
@@ -282,7 +286,7 @@ def _query_clickhouse(
 
     return AuditLogsResponse(
         source="clickhouse",
-        total=len(records),
+        total=total_count,
         records=records,
         integrity_checked=integrity_check,
     )
@@ -307,6 +311,8 @@ def _query_postgres(
         )
         if action:
             q = q.filter(AuditLogMetadata.action == action)
+        
+        total_count = q.count()
         logs = q.offset(offset).limit(limit).all()
 
         records = [
@@ -321,7 +327,7 @@ def _query_postgres(
         ]
         return AuditLogsResponse(
             source="postgres",
-            total=len(records),
+            total=total_count,
             records=records,
             integrity_checked=False,
         )

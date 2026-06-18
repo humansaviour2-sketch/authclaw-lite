@@ -4,6 +4,8 @@ import { query } from "@/lib/db";
 import { backendFetch, handleApiError } from "@/lib/api-client";
 import { sessionStore } from "@/lib/session-store";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   try {
     const cookieStore = await cookies();

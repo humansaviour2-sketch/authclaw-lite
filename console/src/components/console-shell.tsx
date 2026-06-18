@@ -18,6 +18,7 @@ import {
   User,
   Building,
   ShieldCheck,
+  Cloud,
 } from "lucide-react";
 
 interface ConsoleShellProps {
@@ -40,6 +41,8 @@ export default function ConsoleShell({ children, userEmail, tenantId, tenantName
     { name: "Compliance Agent", href: "/agent", icon: Bot },
     { name: "Frameworks", href: "/frameworks", icon: Award },
     { name: "Audit", href: "/audit", icon: ScrollText },
+    // Phase 14: AWS Connector
+    { name: "AWS Connectors", href: "/aws", icon: Cloud },
     { name: "Settings", href: "/settings", icon: Settings },
   ];
 

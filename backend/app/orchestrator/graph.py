@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Any, Optional, TypedDict
 
 from langgraph.graph import StateGraph, END
-from app.orchestrator.worker import EphemeralWorker
+import os
 
 logger = logging.getLogger("orchestrator")
 
@@ -82,26 +82,61 @@ class ComplianceState(TypedDict, total=False):
 
 
 def gather_evidence(state: ComplianceState) -> ComplianceState:
-    """GATHER_EVIDENCE: Collect compliance evidence for the target framework."""
+    """GATHER_EVIDENCE: Collect documents from S3 and scan for PII/PHI."""
     logger.info("[%s] Gathering evidence for %s", state["workflow_id"], state["framework"])
     
-    framework = state["framework"]
-    
-    worker = EphemeralWorker(
-        tenant_id=state["tenant_id"],
-        workflow_id=state["workflow_id"],
-        request_id=state.get("request_id", ""),
-        emit_audit_fn=state.get("_emit_audit"),
-    )
-    
+    tenant_id = state["tenant_id"]
     findings = []
-    # Query each mock cloud connector via the ephemeral worker
-    for provider in ["aws", "azure", "gcp"]:
-        try:
-            prov_findings = worker.run_scan(provider, framework)
-            findings.extend(prov_findings)
-        except Exception as e:
-            logger.error("Failed scan for provider %s: %s", provider, e)
+    
+    try:
+        from app.orchestrator.connectors import DocumentScanner
+        scanner = DocumentScanner()
+        docs = scanner.list_documents(tenant_id)
+        
+        presidio_url = os.getenv("PRESIDIO_URL", "http://localhost:3000")
+        if not presidio_url.endswith("/analyze"):
+            presidio_url = f"{presidio_url.rstrip('/')}/analyze"
+        import requests
+        
+        for doc in docs:
+            try:
+                # Fetch text
+                text_content = scanner.fetch_and_extract_text(doc["object_key"], doc["file_name"])
+                if not text_content.strip():
+                    continue
+                
+                # Analyze with Presidio
+                payload = {
+                    "text": text_content,
+                    "language": "en",
+                    "entities": ["EMAIL_ADDRESS", "PERSON", "PHONE_NUMBER", "US_SSN", "CREDIT_CARD"]
+                }
+                resp = requests.post(presidio_url, json=payload, timeout=10)
+                if resp.status_code == 200:
+                    results = resp.json()
+                    if results:
+                        findings.append({
+                            "control": doc["object_key"],
+                            "description": f"Found {len(results)} sensitive entities in document",
+                            "status": "non_compliant",
+                            "evidence": f"Entities: {', '.join(set([r['entity_type'] for r in results]))}",
+                            "entity_count": len(results)
+                        })
+                    else:
+                        findings.append({
+                            "control": doc["object_key"],
+                            "description": "Document contains no detected sensitive data",
+                            "status": "compliant",
+                            "evidence": "Clean scan",
+                            "entity_count": 0
+                        })
+                else:
+                    logger.warning("Presidio returned %d for %s", resp.status_code, doc["object_key"])
+            except Exception as e:
+                logger.error("Failed to process document %s: %s", doc["object_key"], e)
+                
+    except Exception as e:
+        logger.error("Evidence gathering failed: %s", e)
     
     emit = state.get("_emit_audit")
     if emit:
@@ -121,15 +156,17 @@ def gather_evidence(state: ComplianceState) -> ComplianceState:
 
 
 def analyze_compliance(state: ComplianceState) -> ComplianceState:
-    """ANALYZE_COMPLIANCE: Score findings and determine risk level."""
+    """ANALYZE_COMPLIANCE: Score findings based on number of sensitive entities."""
     logger.info("[%s] Analyzing compliance for %s", state["workflow_id"], state["framework"])
     
     findings = state.get("findings", [])
     non_compliant = [f for f in findings if f.get("status") == "non_compliant"]
-    total = len(findings) if findings else 1
+    total_entities = sum(f.get("entity_count", 0) for f in non_compliant)
     
-    # Risk score: 0.0 (fully compliant) to 1.0 (fully non-compliant)
-    risk_score = round(len(non_compliant) / total, 2) if total > 0 else 0.0
+    # Simple risk score: maxes out at 1.0 around 50 entities
+    risk_score = min(1.0, total_entities / 50.0)
+    if not findings:
+        risk_score = 0.0
     
     emit = state.get("_emit_audit")
     if emit:
@@ -139,7 +176,7 @@ def analyze_compliance(state: ComplianceState) -> ComplianceState:
     persist = state.get("_persist_state")
     new_state = {
         **state,
-        "risk_score": risk_score,
+        "risk_score": round(risk_score, 2),
         "current_state": WorkflowState.GENERATE_REMEDIATION_PLAN.value,
         "updated_at": datetime.now(tz=timezone.utc).isoformat(),
     }
@@ -149,39 +186,40 @@ def analyze_compliance(state: ComplianceState) -> ComplianceState:
 
 
 def generate_remediation_plan(state: ComplianceState) -> ComplianceState:
-    """GENERATE_REMEDIATION_PLAN: Create remediation actions for non-compliant findings."""
+    """GENERATE_REMEDIATION_PLAN: Create REPORT ONLY remediation actions for documents with PII."""
     logger.info("[%s] Generating remediation plan", state["workflow_id"])
     
     findings = state.get("findings", [])
     non_compliant = [f for f in findings if f.get("status") == "non_compliant"]
     
-    # Stubbed plan generation — in production this would call an LLM
-    # via the AuthClaw gateway (Gemini 2.5 Flash-Lite through the proxy).
     plan = []
     for finding in non_compliant:
         plan.append({
             "finding_control": finding["control"],
-            "action": f"Remediate: {finding['description']}",
+            "action": f"Review document and remove sensitive data ({finding['evidence']})",
             "priority": "high" if state.get("risk_score", 0) > 0.5 else "medium",
-            "estimated_effort": "2 hours",
-            "steps": [f"Review {finding['control']}", "Apply fix", "Verify compliance"],
+            "estimated_effort": "1 hour",
+            "steps": [
+                f"Locate document in S3: {finding['control']}",
+                "Review the detected sensitive entities",
+                "Manually redact or delete the file from S3 (Report Only Mode)"
+            ],
         })
     
-    # Scans execute without immediate approval, completing the scan stage
-    next_state = WorkflowState.COMPLETE.value
+    next_state = WorkflowState.COMPLETE.value if not plan else "awaiting_approval"
     
     emit = state.get("_emit_audit")
     if emit:
         emit(state["workflow_id"], state["tenant_id"], state.get("request_id", ""),
-             "GENERATE_REMEDIATION_PLAN→COMPLETE", "generate_plan", "completed")
+             "GENERATE_REMEDIATION_PLAN→AWAITING_APPROVAL", "generate_plan", "completed")
     
     persist = state.get("_persist_state")
     new_state = {
         **state,
         "remediation_plan": plan,
-        "current_state": next_state,
-        "execution_status": ExecutionStatus.COMPLETED.value,
-        "completed_at": datetime.now(tz=timezone.utc).isoformat(),
+        "current_state": WorkflowState.AWAITING_APPROVAL.value if plan else WorkflowState.COMPLETE.value,
+        "execution_status": ExecutionStatus.PAUSED.value if plan else ExecutionStatus.COMPLETED.value,
+        "completed_at": datetime.now(tz=timezone.utc).isoformat() if not plan else "",
         "updated_at": datetime.now(tz=timezone.utc).isoformat(),
     }
     if persist:
@@ -264,17 +302,17 @@ def awaiting_approval(state: ComplianceState) -> ComplianceState:
 
 
 def execute_remediation(state: ComplianceState) -> ComplianceState:
-    """EXECUTE_REMEDIATION: Apply the approved remediation plan."""
+    """EXECUTE_REMEDIATION: Apply the approved remediation plan in REPORT ONLY mode."""
     logger.info("[%s] Executing remediation", state["workflow_id"])
     
     plan = state.get("remediation_plan", [])
     
-    worker = EphemeralWorker(
-        tenant_id=state["tenant_id"],
-        workflow_id=state["workflow_id"],
-        request_id=state.get("request_id", ""),
-        emit_audit_fn=state.get("_emit_audit"),
-    )
+    try:
+        from app.orchestrator.connectors import DocumentScanner
+        scanner = DocumentScanner()
+    except Exception as e:
+        logger.error("Failed to initialize DocumentScanner: %s", e)
+        scanner = None
     
     details = []
     actions_successful = 0
@@ -282,24 +320,14 @@ def execute_remediation(state: ComplianceState) -> ComplianceState:
     
     for action in plan:
         control = action.get("finding_control", "")
-        # Map control to provider
-        provider = None
-        control_lower = control.lower()
-        if "aws" in control_lower or "164.312(a)" in control_lower or "art.25" in control_lower:
-            provider = "aws"
-        elif "azure" in control_lower or "164.312(e)" in control_lower or "art.32" in control_lower:
-            provider = "azure"
-        elif "gcp" in control_lower or "164.312(d)" in control_lower or "art.30" in control_lower:
-            provider = "gcp"
-        
-        if provider:
+        if scanner:
             try:
-                res = worker.run_remediation(provider, control)
+                res = scanner.simulate_remediation(control, action.get("action", "Unknown action"))
                 details.append(res)
                 actions_successful += 1
             except Exception as e:
                 details.append({
-                    "connector": provider.upper(),
+                    "connector": "S3Document",
                     "control": control,
                     "status": "failed",
                     "details": str(e)
@@ -307,10 +335,10 @@ def execute_remediation(state: ComplianceState) -> ComplianceState:
                 actions_failed += 1
         else:
             details.append({
-                "connector": "unknown",
+                "connector": "S3Document",
                 "control": control,
                 "status": "failed",
-                "details": f"Unknown provider for control {control}"
+                "details": "Scanner not initialized"
             })
             actions_failed += 1
             

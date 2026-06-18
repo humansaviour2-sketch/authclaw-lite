@@ -31,6 +31,7 @@ export default function OverviewPage() {
 
   const fetchMetrics = async () => {
     try {
+      setLoading(true);
       const res = await fetch("/api/dashboard");
       if (res.status === 401) {
         window.location.href = "/login";

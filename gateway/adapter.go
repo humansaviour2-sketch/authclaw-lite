@@ -149,6 +149,40 @@ func ExtractAndNormalize(r *http.Request, provider string) (*NormalizedRequest, 
 		}
 		return normalized, rebuilder, nil
 
+	// Phase 14: Bedrock uses the Anthropic Messages API format for Claude models
+	// and the Amazon Titan format for Titan models. We normalize both to NormalizedRequest.
+	case "bedrock":
+		// Try Anthropic Messages API format first (Claude via Bedrock)
+		var anthropicReq AnthropicRequest
+		if err := json.Unmarshal(bodyBytes, &anthropicReq); err == nil && anthropicReq.Model != "" {
+			normalized.Model = anthropicReq.Model
+			if anthropicReq.System != "" {
+				normalized.Prompts = append(normalized.Prompts, anthropicReq.System)
+			}
+			for _, msg := range anthropicReq.Messages {
+				normalized.Prompts = append(normalized.Prompts, msg.Content)
+			}
+			rebuilder := func(newPrompts []string) ([]byte, error) {
+				idx := 0
+				if anthropicReq.System != "" && idx < len(newPrompts) {
+					anthropicReq.System = newPrompts[idx]
+					idx++
+				}
+				for i := range anthropicReq.Messages {
+					if idx < len(newPrompts) {
+						anthropicReq.Messages[i].Content = newPrompts[idx]
+						idx++
+					}
+				}
+				return json.Marshal(anthropicReq)
+			}
+			return normalized, rebuilder, nil
+		}
+		// Fallback: extract model from URL path (Bedrock model ID is in the path)
+		normalized.Model = ExtractBedrockModel("")
+		rebuilder := func(newPrompts []string) ([]byte, error) { return bodyBytes, nil }
+		return normalized, rebuilder, nil
+
 	default:
 		// Non-parsed or passthrough
 		rebuilder := func(newPrompts []string) ([]byte, error) {

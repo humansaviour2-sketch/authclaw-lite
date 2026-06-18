@@ -22,6 +22,8 @@ type ProxyServer struct {
 	CohereBaseURL      string
 	AzureOpenAIBaseURL string
 	GeminiBaseURL      string
+	// Phase 14: AWS Bedrock
+	BedrockBaseURL string
 }
 
 func NewProxyServer() *ProxyServer {
@@ -42,12 +44,18 @@ func NewProxyServer() *ProxyServer {
 	if geminiBase == "" {
 		geminiBase = "https://generativelanguage.googleapis.com"
 	}
+	// Phase 14: Bedrock endpoint (only populated when BEDROCK_ENABLED=true)
+	bedrockBase := ""
+	if isBedrockEnabled() {
+		bedrockBase = BedrockEndpoint()
+	}
 	return &ProxyServer{
 		OpenAIBaseURL:      openAIBase,
 		AnthropicBaseURL:   anthropicBase,
 		CohereBaseURL:      cohereBase,
 		AzureOpenAIBaseURL: azureBase,
 		GeminiBaseURL:      geminiBase,
+		BedrockBaseURL:     bedrockBase,
 	}
 }
 
@@ -66,10 +74,19 @@ func (p *ProxyServer) RouteRequest(r *http.Request) string {
 			return p.AzureOpenAIBaseURL
 		case "gemini":
 			return p.GeminiBaseURL
+		// Phase 14: Bedrock provider via explicit header
+		case "bedrock":
+			if p.BedrockBaseURL != "" {
+				return p.BedrockBaseURL
+			}
 		}
 	}
 
 	path := r.URL.Path
+	// Phase 14: Bedrock path prefix routing (e.g. /bedrock/model/anthropic.claude.../invoke)
+	if strings.HasPrefix(path, "/bedrock/") && p.BedrockBaseURL != "" {
+		return p.BedrockBaseURL
+	}
 	if strings.Contains(path, ":generateContent") {
 		return p.GeminiBaseURL
 	}
@@ -123,6 +140,9 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		provider = "cohere"
 	} else if targetURLStr == p.GeminiBaseURL || strings.Contains(targetURLStr, "googleapis.com") {
 		provider = "gemini"
+	} else if strings.Contains(targetURLStr, "bedrock-runtime") || strings.Contains(targetURLStr, "bedrock.") {
+		// Phase 14: detect Bedrock by endpoint URL
+		provider = "bedrock"
 	}
 
 	// Extract and normalize request details
@@ -146,7 +166,7 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Inbound Prompt Redaction
 	var tokenMap map[string]string
-	if provider == "openai" || provider == "anthropic" || provider == "gemini" {
+	if provider == "openai" || provider == "anthropic" || provider == "gemini" || provider == "bedrock" {
 		if normalized != nil && len(normalized.Prompts) > 0 {
 			var redactErr error
 			var redactedPrompts []string
@@ -209,6 +229,25 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Phase 14: Bedrock hard usage limit enforcement
+	// Runs AFTER OPA (which can also block on model whitelist).
+	// Checked here to prevent any AWS request when daily cap is exceeded.
+	if provider == "bedrock" {
+		if limitErr := CheckBedrockUsageLimits(r.Context(), tenantID); limitErr != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(fmt.Sprintf(`{"error": "BedrockLimitExceeded", "message": "%s"}`, limitErr.Error())))
+			EmitAuditEvent(&AuditEvent{
+				ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
+				TenantID: tenantID, PolicyID: policyID, Action: "block",
+				DecisionReason: limitErr.Error(), Provider: provider, Model: model,
+				PromptCount: promptCount, RequestSize: int(r.ContentLength),
+				ResponseStatus: http.StatusTooManyRequests, DurationMs: 0,
+			})
+			return
+		}
+	}
+
 	target, err := url.Parse(targetURLStr)
 	if err != nil {
 		http.Error(w, "Invalid target URL", http.StatusInternalServerError)
@@ -226,6 +265,7 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		req.URL.Scheme = target.Scheme
 		req.URL.Host = target.Host
 		if provider == "gemini" {
+			// Existing Gemini auth — UNCHANGED
 			req.Header.Del("Authorization")
 			geminiKey := os.Getenv("GEMINI_API_KEY")
 			if geminiKey != "" {
@@ -233,6 +273,20 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				q := req.URL.Query()
 				q.Set("key", geminiKey)
 				req.URL.RawQuery = q.Encode()
+			}
+		} else if provider == "bedrock" {
+			// Phase 14: AWS SigV4 signing for Bedrock
+			// Strip the /bedrock prefix from the path before forwarding
+			req.URL.Path = strings.TrimPrefix(req.URL.Path, "/bedrock")
+			req.Header.Del("Authorization")
+			// bodyBytes already captured by ExtractAndNormalize; re-read for signing
+			var bodyForSigning []byte
+			if req.Body != nil {
+				bodyForSigning, _ = io.ReadAll(req.Body)
+				req.Body = io.NopCloser(bytes.NewBuffer(bodyForSigning))
+			}
+			if signErr := SignBedrockRequest(req, bodyForSigning); signErr != nil {
+				log.Printf("[BEDROCK] SigV4 signing failed: %v", signErr)
 			}
 		}
 	}
@@ -290,4 +344,15 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		DurationMs:     duration,
 	}
 	EmitAuditEvent(event)
+
+	// Phase 14: Increment Bedrock usage counters after a successful response
+	if provider == "bedrock" && wrappedWriter.status == http.StatusOK {
+		// Estimate tokens from prompt count (Bedrock response body already consumed)
+		// 4 chars ≈ 1 token — rough estimate for cost tracking
+		estimatedTokens := 0
+		for _, p := range originalPrompts {
+			estimatedTokens += len(p) / 4
+		}
+		go IncrementBedrockUsage(r.Context(), tenantID, estimatedTokens)
+	}
 }
