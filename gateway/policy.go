@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,10 +29,15 @@ func InitRedis() {
 	if redisURL == "" {
 		redisURL = "localhost:6379"
 	}
-	// Connect to Redis
-	RedisClient = redis.NewClient(&redis.Options{
-		Addr: redisURL,
-	})
+	if strings.HasPrefix(redisURL, "redis://") || strings.HasPrefix(redisURL, "rediss://") {
+		opts, err := redis.ParseURL(redisURL)
+		if err == nil {
+			RedisClient = redis.NewClient(opts)
+			return
+		}
+		log.Printf("Invalid REDIS_URL %q, falling back to raw address: %v", redisURL, err)
+	}
+	RedisClient = redis.NewClient(&redis.Options{Addr: redisURL})
 }
 
 // Policy definitions
@@ -39,9 +47,13 @@ type ModelRules struct {
 }
 
 type RegexRule struct {
-	Name    string `yaml:"name" json:"name"`
-	Pattern string `yaml:"pattern" json:"pattern"`
-	Reason  string `yaml:"reason" json:"reason"`
+	Name               string `yaml:"name" json:"name"`
+	Pattern            string `yaml:"pattern" json:"pattern"`
+	Reason             string `yaml:"reason" json:"reason"`
+	Action             string `yaml:"action" json:"action"`
+	Severity           string `yaml:"severity" json:"severity"`
+	Entity             string `yaml:"entity" json:"entity"`
+	HITLTimeoutSeconds int    `yaml:"hitl_timeout_seconds" json:"hitl_timeout_seconds"`
 }
 
 type TopicRule struct {
@@ -112,9 +124,64 @@ func ValidatePolicyYAML(yamlStr string) (*PolicyConfig, error) {
 		if _, err := regexp.Compile(rule.Pattern); err != nil {
 			return nil, fmt.Errorf("invalid regex pattern '%s': %w", rule.Pattern, err)
 		}
+		switch strings.ToLower(strings.TrimSpace(rule.Action)) {
+		case "", "redact", "require_approval", "block":
+		default:
+			return nil, fmt.Errorf("invalid regex rule action '%s' for rule '%s'", rule.Action, rule.Name)
+		}
 	}
 
 	return &config, nil
+}
+
+type ApprovalRuleMatch struct {
+	Rule        RegexRule
+	PromptIndex int
+	MatchHash   string
+}
+
+func (r RegexRule) normalizedAction() string {
+	action := strings.ToLower(strings.TrimSpace(r.Action))
+	if action == "" {
+		return "redact"
+	}
+	return action
+}
+
+func FindRegexRuleMatchByAction(config *PolicyConfig, prompts []string, action string) (*ApprovalRuleMatch, error) {
+	if config == nil {
+		return nil, nil
+	}
+	for _, rule := range config.RegexRules {
+		if rule.normalizedAction() != action {
+			continue
+		}
+		re, err := regexp.Compile(rule.Pattern)
+		if err != nil {
+			return nil, err
+		}
+		for idx, prompt := range prompts {
+			match := re.FindString(prompt)
+			if match == "" {
+				continue
+			}
+			hash := sha256.Sum256([]byte(match))
+			return &ApprovalRuleMatch{
+				Rule:        rule,
+				PromptIndex: idx,
+				MatchHash:   hex.EncodeToString(hash[:]),
+			}, nil
+		}
+	}
+	return nil, nil
+}
+
+func FindApprovalRuleMatch(config *PolicyConfig, prompts []string) (*ApprovalRuleMatch, error) {
+	return FindRegexRuleMatchByAction(config, prompts, "require_approval")
+}
+
+func FindBlockingRuleMatch(config *PolicyConfig, prompts []string) (*ApprovalRuleMatch, error) {
+	return FindRegexRuleMatchByAction(config, prompts, "block")
 }
 
 // LoadPolicyWithCache handles loading from cache, fallback to Postgres under RLS

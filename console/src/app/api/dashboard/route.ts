@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { query } from "@/lib/db";
+import { queryWithTenantContext } from "@/lib/db";
 import { backendFetch, handleApiError } from "@/lib/api-client";
 import { sessionStore } from "@/lib/session-store";
 
@@ -25,14 +25,16 @@ export async function GET() {
     const tenantId = payload.tenantId;
 
     // 1. Get open approvals count
-    const approvalsRes = await query(
+    const approvalsRes = await queryWithTenantContext(
+      tenantId,
       "SELECT COUNT(*)::integer as count FROM pending_approvals WHERE tenant_id = $1 AND status = 'PENDING'",
       [tenantId]
     );
     const openApprovals = approvalsRes.rows[0]?.count || 0;
 
     // 2. Get redactions count in last 24 hours
-    const redactionsRes = await query(
+    const redactionsRes = await queryWithTenantContext(
+      tenantId,
       "SELECT COUNT(*)::integer as count FROM redaction_tokens WHERE tenant_id = $1 AND created_at >= NOW() - INTERVAL '24 HOURS'",
       [tenantId]
     );

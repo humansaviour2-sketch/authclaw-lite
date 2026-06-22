@@ -319,9 +319,24 @@ def _query_postgres(
             {
                 "id": str(log.id),
                 "record_id": str(log.record_id),
+                "tenant_id": str(log.tenant_id),
+                "timestamp": log.created_at.isoformat() if log.created_at else None,
+                "actor_id": str(log.actor_id) if log.actor_id else "",
+                "actor_type": "gateway",
                 "action": log.action,
+                "policy_id": "",
+                "provider": "",
+                "model": "",
+                "reason": "",
+                "prompt_count": 0,
+                "request_size": 0,
+                "response_status": 0,
+                "duration_ms": 0,
                 "frameworks_affected": log.frameworks_affected,
                 "created_at": log.created_at.isoformat() if log.created_at else None,
+                "request_id": "",
+                "prior_hash": "",
+                "integrity_hash": "",
             }
             for log in logs
         ]

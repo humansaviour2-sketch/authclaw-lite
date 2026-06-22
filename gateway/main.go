@@ -7,9 +7,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Try to load .env.local from parent directory
+	_ = godotenv.Load("../.env.local")
+
 	// Initialize database
 	InitDB()
 

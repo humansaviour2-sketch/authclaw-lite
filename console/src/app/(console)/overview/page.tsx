@@ -9,9 +9,7 @@ import {
   Award, 
   ArrowUpRight, 
   RefreshCw,
-  Building,
   CheckCircle2,
-  XCircle
 } from "lucide-react";
 import Link from "next/link";
 
@@ -26,8 +24,6 @@ interface DashboardMetrics {
 export default function OverviewPage() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [pollingActive, setPollingActive] = useState(true);
 
   const fetchMetrics = async () => {
     try {
@@ -40,21 +36,24 @@ export default function OverviewPage() {
       if (!res.ok) throw new Error("Failed to load metrics");
       const data = await res.json();
       setMetrics(data);
-      setError(null);
-    } catch (err: any) {
-      console.warn("Overview fetch metrics failed:", err.message);
-      setError(err.message || "Could not retrieve real-time metrics");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Could not retrieve real-time metrics";
+      console.warn("Overview fetch metrics failed:", message);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchMetrics();
-    if (!pollingActive) return;
+    const initialFetch = window.setTimeout(() => {
+      void fetchMetrics();
+    }, 0);
     const interval = setInterval(fetchMetrics, 5000);
-    return () => clearInterval(interval);
-  }, [pollingActive]);
+    return () => {
+      window.clearTimeout(initialFetch);
+      clearInterval(interval);
+    };
+  }, []);
 
   const complianceReadiness = [
     { name: "SOC 2 Type II", score: 85, color: "from-emerald-500 to-teal-500", desc: "Trust Services Criteria - Security & Confidentiality" },
@@ -68,10 +67,10 @@ export default function OverviewPage() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-extrabold tracking-tight text-white bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
-            Platform Overview
+            Governance Overview
           </h1>
           <p className="text-slate-400 text-sm mt-1">
-            Real-time monitoring of AI governance, data privacy compliance, and proxy telemetry.
+            Live view of AI traffic governance, redaction activity, and gateway telemetry.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -196,10 +195,10 @@ export default function OverviewPage() {
           <div>
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <Award className="w-5 h-5 text-indigo-400" />
-              Continuous Compliance Readiness
+              AI Governance Readiness
             </h3>
             <p className="text-slate-400 text-xs mt-1">
-              Automated audit evaluation mapping control configurations to regulatory compliance safeguards.
+              Demo posture based on gateway controls, redaction activity, policies, and audit evidence.
             </p>
           </div>
 
@@ -222,8 +221,8 @@ export default function OverviewPage() {
           </div>
 
           <div className="mt-6 pt-4 border-t border-slate-800/40 flex justify-end">
-            <Link href="/frameworks" className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition">
-              Explore evidence control rooms <ArrowUpRight className="w-3.5 h-3.5" />
+            <Link href="/connect" className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition">
+              Connect an AI app <ArrowUpRight className="w-3.5 h-3.5" />
             </Link>
           </div>
         </div>
@@ -233,10 +232,10 @@ export default function OverviewPage() {
           <div>
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <ShieldCheck className="w-5 h-5 text-emerald-400" />
-              Approvals Status
+              Governance Status
             </h3>
             <p className="text-slate-400 text-xs mt-1">
-              Actions needing human authorization before execution.
+              Runtime controls protecting traffic before it reaches the model provider.
             </p>
           </div>
 
@@ -250,7 +249,7 @@ export default function OverviewPage() {
                 </div>
                 <h4 className="text-sm font-semibold text-slate-200">Pending Authorization</h4>
                 <p className="text-[11px] text-slate-500 max-w-[200px] mt-1">
-                  Compliance Agent has generated remediation fixes requiring admin approval.
+                  A governance action is waiting for admin review.
                 </p>
               </>
             ) : (
@@ -258,17 +257,17 @@ export default function OverviewPage() {
                 <CheckCircle2 className="w-12 h-12 text-emerald-400 mb-3" />
                 <h4 className="text-sm font-semibold text-slate-200">All Clear</h4>
                 <p className="text-[11px] text-slate-500 max-w-[200px] mt-1">
-                  No pending workflow tasks awaiting human verification.
+                  No pending governance actions awaiting review.
                 </p>
               </>
             )}
           </div>
 
           <Link 
-            href="/agent"
+            href="/gateway"
             className="w-full text-center py-2.5 rounded-lg bg-slate-850 hover:bg-slate-800 text-xs font-semibold text-slate-200 border border-slate-800 transition"
           >
-            Open Compliance Agent
+            Configure Gateway
           </Link>
         </div>
 

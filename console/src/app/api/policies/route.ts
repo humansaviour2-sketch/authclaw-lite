@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { query } from "@/lib/db";
+import { queryWithTenantContext } from "@/lib/db";
 import { backendFetch, handleApiError } from "@/lib/api-client";
 
 export async function GET(request: Request) {
@@ -17,7 +17,8 @@ export async function GET(request: Request) {
       const payload = JSON.parse(sessionToken);
       const tenantId = payload.tenantId;
 
-      const res = await query(
+      const res = await queryWithTenantContext(
+        tenantId,
         "SELECT id, name, description, policy_yaml, version, is_active, created_at FROM policies WHERE tenant_id = $1 AND id = $2",
         [tenantId, id]
       );
@@ -29,7 +30,7 @@ export async function GET(request: Request) {
 
     const data = await backendFetch("/v1/policies");
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }
@@ -42,8 +43,7 @@ export async function POST(request: Request) {
       body: JSON.stringify(body),
     });
     return NextResponse.json(data, { status: 201 });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }
-

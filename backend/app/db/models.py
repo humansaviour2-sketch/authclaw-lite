@@ -30,6 +30,10 @@ class Tenant(Base):
     redaction_tokens = relationship("RedactionToken", back_populates="tenant", cascade="all, delete-orphan")
     workflows = relationship("ComplianceWorkflow", back_populates="tenant", cascade="all, delete-orphan")
     chat_sessions = relationship("ChatSession", back_populates="tenant", cascade="all, delete-orphan")
+    # Phase 16 — Evidence Repository
+    evidence_records = relationship("EvidenceRecord", back_populates="tenant", cascade="all, delete-orphan")
+    # Phase 17 — Findings Dashboard
+    findings = relationship("Finding", back_populates="tenant", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_tenant_status", "status"),
@@ -45,10 +49,10 @@ class User(Base):
     email = Column(String(255), nullable=False)
     password_hash = Column(String(255), nullable=True)
     role = Column(
-    Enum("admin", "operator", "viewer", name="user_role"),
+    Enum("owner", "admin", "developer", "operator", "viewer", name="user_role"),
     nullable=False,
     default="viewer"
-    )  # admin, operator, viewer
+    )  # owner, admin, developer, operator, viewer
     mfa_enabled = Column(Boolean, default=False)
     mfa_secret = Column(String(32), nullable=True)  # TOTP secret (encrypted)
     mfa_backup_codes = Column(ARRAY(String), nullable=True)  # TOTP backup codes
@@ -143,6 +147,79 @@ class GatewayConfig(Base):
     __table_args__ = (
         Index("idx_gateway_tenant", "tenant_id"),
         Index("idx_gateway_active", "is_active"),
+    )
+
+
+class ProviderCredential(Base):
+    """Encrypted model-provider credential for AuthClaw Lite gateway egress."""
+    __tablename__ = "provider_credentials"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    provider = Column(String(50), nullable=False)
+    display_name = Column(String(255), nullable=False)
+    endpoint = Column(String(512), nullable=True)
+    encrypted_secret = Column(Text, nullable=False)
+    auth_scheme = Column(String(50), nullable=False, default="api_key")
+    status = Column(String(50), nullable=False, default="active")
+    last_verified_at = Column(DateTime(timezone=True), nullable=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    rotated_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("idx_provider_credential_tenant", "tenant_id"),
+        Index("idx_provider_credential_provider", "tenant_id", "provider"),
+        Index("idx_provider_credential_status", "status"),
+    )
+
+
+class OnboardingEmailOTP(Base):
+    """Public signup email OTP state before a tenant-scoped key exists."""
+    __tablename__ = "onboarding_email_otps"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = Column(String(255), nullable=False)
+    tenant_name = Column(String(255), nullable=False)
+    otp_hash = Column(String(255), nullable=False)
+    status = Column(String(50), nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True)
+    api_key_id = Column(UUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_onboarding_otp_email", "email"),
+        Index("idx_onboarding_otp_status", "status"),
+        Index("idx_onboarding_otp_expires", "expires_at"),
+    )
+
+
+class OnboardingStatus(Base):
+    """Tenant-scoped onboarding checklist state."""
+    __tablename__ = "onboarding_status"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, unique=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    signup_id = Column(UUID(as_uuid=True), ForeignKey("onboarding_email_otps.id"), nullable=True)
+    email_verified = Column(Boolean, nullable=False, default=False)
+    tenant_created = Column(Boolean, nullable=False, default=False)
+    api_key_issued = Column(Boolean, nullable=False, default=False)
+    provider_key_saved = Column(Boolean, nullable=False, default=False)
+    route_created = Column(Boolean, nullable=False, default=False)
+    policy_created = Column(Boolean, nullable=False, default=False)
+    snippet_viewed = Column(Boolean, nullable=False, default=False)
+    current_step = Column(String(50), nullable=False, default="connect_provider")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_onboarding_status_tenant", "tenant_id"),
+        Index("idx_onboarding_status_step", "current_step"),
     )
 
 
@@ -368,4 +445,148 @@ class AWSS3Document(Base):
         Index("idx_s3_docs_synced", "synced_at"),
         # Prevent duplicate keys per tenant+bucket
         UniqueConstraint("tenant_id", "bucket_name", "object_key", name="uq_s3_doc_tenant_key"),
+    )
+
+
+# =============================================================================
+# Phase 16 — Evidence Repository
+# All tables below are new and additive. No existing model was modified.
+# =============================================================================
+
+class EvidenceRecord(Base):
+    """Permanent evidence record for all compliance activity.
+
+    Created whenever a compliance scan, approval event, or gateway action
+    produces a trackable finding. This table is the source of truth consumed
+    by Phase 17+ (Findings Dashboard, Reports, RAG, Enterprise Governance).
+    """
+    __tablename__ = "evidence_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+
+    # Link back to the workflow that produced this evidence (nullable for events
+    # that occur outside of a workflow, e.g. gateway redactions)
+    workflow_id = Column(String(255), nullable=True)
+
+    # The compliance framework this evidence belongs to
+    framework = Column(String(50), nullable=False)  # GDPR, HIPAA, SOC2
+
+    # Where the evidence came from
+    # s3_document | gateway_event | audit_event | approval_event | policy_evaluation
+    source_type = Column(String(100), nullable=False)
+
+    # A human-readable reference to the specific source artifact
+    # e.g. "tenant-xxx/file.txt", "audit-event-<uuid>", "approval-<uuid>"
+    source_reference = Column(Text, nullable=True)
+
+    # What kind of evidence this is
+    # pii_detected | policy_violation | approval_record | audit_log | scan_result
+    evidence_type = Column(String(100), nullable=False)
+
+    # Full structured payload — Presidio results, approval details, etc.
+    evidence_data = Column(JSON, nullable=False, default=dict)
+
+    # Severity classification: critical | high | medium | low | info
+    severity = Column(String(50), nullable=False, default="info")
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    # Relationships
+    tenant = relationship("Tenant", back_populates="evidence_records")
+    links = relationship("EvidenceLink", back_populates="evidence", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_evidence_tenant", "tenant_id"),
+        Index("idx_evidence_workflow", "workflow_id"),
+        Index("idx_evidence_framework", "framework"),
+        Index("idx_evidence_type", "evidence_type"),
+        Index("idx_evidence_severity", "severity"),
+        Index("idx_evidence_created", "created_at"),
+    )
+
+
+class EvidenceLink(Base):
+    """Traceability links — connects one evidence record to any related entity.
+
+    Supported linked_type values:
+      finding   — a specific finding within a workflow
+      workflow  — a ComplianceWorkflow
+      approval  — a PendingApproval
+      report    — a future compliance report (Phase 18+)
+    """
+    __tablename__ = "evidence_links"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence_records.id"), nullable=False)
+
+    # Type of the linked entity: finding | workflow | approval | report
+    linked_type = Column(String(50), nullable=False)
+
+    # String ID of the linked entity (UUID or workflow_id string)
+    linked_id = Column(String(255), nullable=False)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    # Relationships
+    evidence = relationship("EvidenceRecord", back_populates="links")
+
+    __table_args__ = (
+        Index("idx_evidence_link_tenant", "tenant_id"),
+        Index("idx_evidence_link_evidence", "evidence_id"),
+        Index("idx_evidence_link_linked", "linked_type", "linked_id"),
+    )
+
+
+# =============================================================================
+# Phase 17 — Findings Dashboard
+# =============================================================================
+
+class Finding(Base):
+    """Actionable compliance issues derived from evidence."""
+    __tablename__ = "findings"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    workflow_id = Column(String(255), nullable=True)
+    evidence_id = Column(UUID(as_uuid=True), ForeignKey("evidence_records.id"), nullable=True)
+    
+    framework = Column(String(50), nullable=False)
+    finding_key = Column(String(512), nullable=False)  # framework|finding_type|source_reference
+    
+    title = Column(String(512), nullable=False)
+    description = Column(Text, nullable=True)
+    
+    # critical, high, medium, low, info
+    severity = Column(String(50), nullable=False, default="medium")
+    
+    # OPEN, ACKNOWLEDGED, IN_PROGRESS, AWAITING_APPROVAL, RESOLVED, FALSE_POSITIVE, ACCEPTED_RISK
+    status = Column(String(50), nullable=False, default="OPEN")
+    
+    # PII_EXPOSURE, POLICY_VIOLATION, ACCESS_CONTROL, DATA_RETENTION, ENCRYPTION, AUDIT_GAP, AI_GOVERNANCE
+    finding_type = Column(String(100), nullable=False)
+    
+    risk_score = Column(Float, nullable=False, default=0.0)
+    remediation_summary = Column(Text, nullable=True)
+    owner_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Relationships
+    tenant = relationship("Tenant", back_populates="findings")
+    evidence = relationship("EvidenceRecord")
+    owner = relationship("User")
+
+    __table_args__ = (
+        Index("idx_finding_tenant", "tenant_id"),
+        Index("idx_finding_workflow", "workflow_id"),
+        Index("idx_finding_framework", "framework"),
+        Index("idx_finding_status", "status"),
+        Index("idx_finding_severity", "severity"),
+        Index("idx_finding_type", "finding_type"),
+        Index("idx_finding_created", "created_at"),
+        Index("idx_finding_key", "finding_key"),
     )

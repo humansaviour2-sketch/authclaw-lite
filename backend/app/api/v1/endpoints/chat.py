@@ -268,22 +268,21 @@ def post_message(
                     logger.error("Failed to trigger remediation from chat: %s", exc)
                     response_text = f"Failed to execute remediation: {str(exc)}"
 
-    else:  # READ_ONLY: Query Gemini via reverse proxy
-        # Retrieve history for the Gemini prompt (up to last 15 messages to stay within prompt limits)
-        history = db.query(ChatMessage).filter(
-            ChatMessage.session_id == session_id
-        ).order_by(ChatMessage.timestamp.asc()).all()
-
-        contents = []
-        for msg in history:
-            role = "user" if msg.sender == "user" else "model"
-            contents.append({
-                "role": role,
-                "parts": [{"text": msg.text}]
-            })
-
+    else:  # READ_ONLY: Query Gemini via reverse proxy (current message only)
         gateway_url = os.getenv("GATEWAY_URL", "http://localhost:8080")
-        auth_header = request.headers.get("Authorization")
+        # Use the Authorization header forwarded from the frontend (raw API key Bearer token)
+        # Fallback to a configured gateway key if the header is unavailable
+        auth_header = request.headers.get("Authorization") or f"Bearer {os.getenv('GATEWAY_API_KEY', '')}"
+
+        # Send ONLY the current user message — not the full history.
+        # Gemini's stateless API doesn't benefit from history here and it
+        # inflates prompt_count / billing unnecessarily.
+        contents = [
+            {
+                "role": "user",
+                "parts": [{"text": message_text}]
+            }
+        ]
 
         try:
             res = requests.post(

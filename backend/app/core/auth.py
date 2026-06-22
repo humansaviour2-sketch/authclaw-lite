@@ -21,7 +21,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         
         # Bypass authentication for public routes
-        if path in ["/health", "/docs", "/openapi.json", "/redoc"] or path.startswith("/static"):
+        public_paths = {
+            "/health",
+            "/docs",
+            "/openapi.json",
+            "/redoc",
+            "/v1/onboarding/signup",
+            "/v1/onboarding/verify",
+        }
+        if path in public_paths or path.startswith("/static"):
             return await call_next(request)
 
         auth_header = request.headers.get("Authorization")
@@ -77,12 +85,15 @@ def get_tenant_db(request: Request, db: Session = Depends(get_db)) -> Generator[
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id:
-        db.execute(text("SET app.current_tenant_id = :tenant_id"), {"tenant_id": str(tenant_id)})
+        db.execute(
+            text("SELECT set_config('app.current_tenant_id', :tenant_id, false)"),
+            {"tenant_id": str(tenant_id)},
+        )
     try:
         yield db
     finally:
         # Reset the tenant context parameter
-        db.execute(text("SET app.current_tenant_id = ''"))
+        db.execute(text("SELECT set_config('app.current_tenant_id', '', false)"))
 
 
 def require_scopes(required_scopes: List[str]):
@@ -98,3 +109,7 @@ def require_scopes(required_scopes: List[str]):
                     detail="Forbidden: Insufficient scopes"
                 )
     return Depends(dependency)
+
+def get_current_tenant(request: Request) -> str:
+    """Dependency to retrieve the current tenant_id from the request state"""
+    return str(request.state.tenant_id)

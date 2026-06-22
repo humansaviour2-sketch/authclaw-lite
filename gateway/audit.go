@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"log"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // AuditEvent represents the schema of traffic events logged by the gateway.
@@ -29,6 +33,8 @@ type AuditEvent struct {
 // and falls back to a structured stdout log if Kafka is unavailable.
 // The function is intentionally non-blocking; failures are logged and swallowed.
 func EmitAuditEvent(event *AuditEvent) {
+	persistAuditMetadata(event)
+
 	// Attempt Kafka publish first.
 	if err := PublishAuditEvent(event); err != nil {
 		log.Printf("[AUDIT] Kafka serialisation error: %v — falling back to stdout", err)
@@ -50,4 +56,29 @@ func logToStdout(event *AuditEvent) {
 		return
 	}
 	log.Printf("[AUDIT] %s", string(eventBytes))
+}
+
+func persistAuditMetadata(event *AuditEvent) {
+	if event == nil || DB == nil || event.TenantID == "" || event.ID == "" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := RunInTenantTx(ctx, event.TenantID, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO audit_log_metadata (
+				id, tenant_id, record_id, actor_id, action, frameworks_affected, created_at
+			)
+			VALUES (
+				gen_random_uuid(), $1, $2::uuid, NULL, $3, $4, $5
+			)
+			ON CONFLICT (record_id) DO NOTHING
+		`, event.TenantID, event.ID, event.Action, pq.Array(event.FrameworksAffected), event.Timestamp)
+		return err
+	})
+	if err != nil {
+		log.Printf("[AUDIT] Postgres metadata fallback failed: %v", err)
+	}
 }

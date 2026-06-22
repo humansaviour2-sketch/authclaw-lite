@@ -18,6 +18,7 @@ from typing import Any, Optional, TypedDict
 
 from langgraph.graph import StateGraph, END
 import os
+from app.core.compliance_utils import calculate_severity
 
 logger = logging.getLogger("orchestrator")
 
@@ -69,11 +70,16 @@ class ComplianceState(TypedDict, total=False):
     started_at: str
     updated_at: str
     completed_at: str
-    # Callbacks injected by the runner
+    # Callbacks injected by the runner — graph nodes must only use state.get("_cb") pattern
     _emit_audit: Any  # callable(workflow_id, tenant_id, request_id, transition, action, status)
     _persist_state: Any  # callable(state) -> None
     _create_approval: Any  # callable(tenant_id, workflow_id, plan) -> approval_id
     _check_approval: Any  # callable(approval_id) -> status string
+    # Phase 16: callable(tenant_id, workflow_id, framework, source_type, source_reference,
+    #                     evidence_type, evidence_data, severity) -> None
+    _store_evidence: Any
+    # Phase 17: callable(tenant_id, workflow_id, evidence_id, framework, finding_type, source_reference, title, description, severity, status, risk_score, remediation_summary) -> None
+    _store_finding: Any
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -115,13 +121,40 @@ def gather_evidence(state: ComplianceState) -> ComplianceState:
                 if resp.status_code == 200:
                     results = resp.json()
                     if results:
+                        entity_types = list(set([r["entity_type"] for r in results]))
                         findings.append({
                             "control": doc["object_key"],
                             "description": f"Found {len(results)} sensitive entities in document",
                             "status": "non_compliant",
-                            "evidence": f"Entities: {', '.join(set([r['entity_type'] for r in results]))}",
+                            "evidence": f"Entities: {', '.join(entity_types)}",
                             "entity_count": len(results)
                         })
+                        # Phase 16: store evidence via callback — no direct DB access here
+                        store_fn = state.get("_store_evidence")
+                        if store_fn:
+                            try:
+                                severity = calculate_severity(len(results))
+                                store_fn(
+                                    state["tenant_id"],
+                                    state["workflow_id"],
+                                    state["framework"],
+                                    "s3_document",
+                                    doc["object_key"],
+                                    "pii_detected",
+                                    {
+                                        "object_key": doc["object_key"],
+                                        "file_name": doc.get("file_name", ""),
+                                        "entity_count": len(results),
+                                        "entity_types": entity_types,
+                                        "presidio_results": results,
+                                    },
+                                    severity,
+                                )
+                            except Exception as _ev_exc:
+                                logger.warning(
+                                    "Evidence storage failed for %s (non-fatal): %s",
+                                    doc["object_key"], _ev_exc,
+                                )
                     else:
                         findings.append({
                             "control": doc["object_key"],
@@ -130,6 +163,30 @@ def gather_evidence(state: ComplianceState) -> ComplianceState:
                             "evidence": "Clean scan",
                             "entity_count": 0
                         })
+                        # Phase 16: store clean scan evidence via callback
+                        store_fn = state.get("_store_evidence")
+                        if store_fn:
+                            try:
+                                store_fn(
+                                    state["tenant_id"],
+                                    state["workflow_id"],
+                                    state["framework"],
+                                    "s3_document",
+                                    doc["object_key"],
+                                    "scan_result",
+                                    {
+                                        "object_key": doc["object_key"],
+                                        "file_name": doc.get("file_name", ""),
+                                        "entity_count": 0,
+                                        "result": "clean",
+                                    },
+                                    "info",
+                                )
+                            except Exception as _ev_exc:
+                                logger.warning(
+                                    "Evidence storage failed for clean scan %s (non-fatal): %s",
+                                    doc["object_key"], _ev_exc,
+                                )
                 else:
                     logger.warning("Presidio returned %d for %s", resp.status_code, doc["object_key"])
             except Exception as e:
@@ -194,10 +251,11 @@ def generate_remediation_plan(state: ComplianceState) -> ComplianceState:
     
     plan = []
     for finding in non_compliant:
+        priority = "high" if state.get("risk_score", 0) > 0.5 else "medium"
         plan.append({
             "finding_control": finding["control"],
             "action": f"Review document and remove sensitive data ({finding['evidence']})",
-            "priority": "high" if state.get("risk_score", 0) > 0.5 else "medium",
+            "priority": priority,
             "estimated_effort": "1 hour",
             "steps": [
                 f"Locate document in S3: {finding['control']}",
@@ -205,21 +263,49 @@ def generate_remediation_plan(state: ComplianceState) -> ComplianceState:
                 "Manually redact or delete the file from S3 (Report Only Mode)"
             ],
         })
+        
+        store_finding_fn = state.get("_store_finding")
+        if store_finding_fn:
+            try:
+                entity_count = finding.get("entity_count", 0)
+                finding_severity = calculate_severity(entity_count)
+                
+                # Extract clean filename
+                raw_control = finding["control"]
+                file_name = raw_control.split("/")[-1] if "/" in raw_control else raw_control
+                
+                store_finding_fn(
+                    state["tenant_id"],
+                    state["workflow_id"],
+                    None,  # evidence_id not tracked in state
+                    state["framework"],
+                    "PII_EXPOSURE",
+                    finding["control"],
+                    f"PII detected in {file_name}",
+                    finding["description"],
+                    finding_severity,
+                    "OPEN",
+                    state.get("risk_score", 0.0),
+                    plan[-1]["action"] + "\n\nSteps:\n- " + "\n- ".join(plan[-1]["steps"])
+                )
+            except Exception as e:
+                logger.warning("Finding storage failed (non-fatal): %s", e)
     
-    next_state = WorkflowState.COMPLETE.value if not plan else "awaiting_approval"
+    # Scans execute without immediate approval, completing the scan stage
+    next_state = WorkflowState.COMPLETE.value
     
     emit = state.get("_emit_audit")
     if emit:
         emit(state["workflow_id"], state["tenant_id"], state.get("request_id", ""),
-             "GENERATE_REMEDIATION_PLAN→AWAITING_APPROVAL", "generate_plan", "completed")
+             "GENERATE_REMEDIATION_PLAN→COMPLETE", "generate_plan", "completed")
     
     persist = state.get("_persist_state")
     new_state = {
         **state,
         "remediation_plan": plan,
-        "current_state": WorkflowState.AWAITING_APPROVAL.value if plan else WorkflowState.COMPLETE.value,
-        "execution_status": ExecutionStatus.PAUSED.value if plan else ExecutionStatus.COMPLETED.value,
-        "completed_at": datetime.now(tz=timezone.utc).isoformat() if not plan else "",
+        "current_state": next_state,
+        "execution_status": ExecutionStatus.COMPLETED.value,
+        "completed_at": datetime.now(tz=timezone.utc).isoformat(),
         "updated_at": datetime.now(tz=timezone.utc).isoformat(),
     }
     if persist:

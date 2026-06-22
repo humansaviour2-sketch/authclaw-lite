@@ -24,7 +24,10 @@ def create_tenant(tenant_in: TenantCreate, db: Session = Depends(get_db)):
 
     tenant_id = uuid.uuid4()
     # Set current_tenant_id to the new tenant's ID to satisfy the RLS checks
-    db.execute(text("SET app.current_tenant_id = :tenant_id"), {"tenant_id": str(tenant_id)})
+    db.execute(
+        text("SELECT set_config('app.current_tenant_id', :tenant_id, false)"),
+        {"tenant_id": str(tenant_id)},
+    )
     try:
         tenant = Tenant(
             id=tenant_id,
@@ -43,4 +46,4 @@ def create_tenant(tenant_in: TenantCreate, db: Session = Depends(get_db)):
             detail=f"Failed to create tenant: {str(e)}"
         )
     finally:
-        db.execute(text("SET app.current_tenant_id = ''"))
+        db.execute(text("SELECT set_config('app.current_tenant_id', '', false)"))

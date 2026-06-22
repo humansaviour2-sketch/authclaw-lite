@@ -25,9 +25,10 @@ class APIKeyCreateResponse(BaseModel):
 
 
 @router.get("", response_model=list[APIKeyResponse], dependencies=[require_scopes(["read"])])
-def list_api_keys(db: Session = Depends(get_tenant_db)):
+def list_api_keys(request: Request, db: Session = Depends(get_tenant_db)):
     """List all API keys for the tenant (isolated by tenant RLS)"""
-    return db.query(APIKey).filter(APIKey.is_active == True).all()
+    tenant_id = request.state.tenant_id
+    return db.query(APIKey).filter(APIKey.tenant_id == tenant_id, APIKey.is_active == True).all()
 
 
 @router.post("", response_model=APIKeyCreateResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_scopes(["write"])])
@@ -77,10 +78,12 @@ def generate_api_key(
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_scopes(["write"])])
 def revoke_api_key(
     id: UUID,
+    request: Request,
     db: Session = Depends(get_tenant_db)
 ):
     """Revoke (delete) an API key for the tenant"""
-    key = db.query(APIKey).filter(APIKey.id == id).first()
+    tenant_id = request.state.tenant_id
+    key = db.query(APIKey).filter(APIKey.tenant_id == tenant_id, APIKey.id == id).first()
     if not key:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

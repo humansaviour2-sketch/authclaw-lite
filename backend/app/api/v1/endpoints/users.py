@@ -11,9 +11,10 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[UserResponse], dependencies=[require_scopes(["read"])])
-def list_users(db: Session = Depends(get_tenant_db)):
+def list_users(request: Request, db: Session = Depends(get_tenant_db)):
     """List all users for the tenant (isolated by tenant RLS)"""
-    return db.query(User).all()
+    tenant_id = request.state.tenant_id
+    return db.query(User).filter(User.tenant_id == tenant_id).all()
 
 
 @router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_scopes(["write"])])
@@ -61,10 +62,12 @@ def create_user(
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_scopes(["write"])])
 def delete_user(
     id: UUID,
+    request: Request,
     db: Session = Depends(get_tenant_db)
 ):
     """Delete a user for the tenant"""
-    user = db.query(User).filter(User.id == id).first()
+    tenant_id = request.state.tenant_id
+    user = db.query(User).filter(User.tenant_id == tenant_id, User.id == id).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { KeyRound, Mail, ShieldAlert, ShieldCheck } from "lucide-react";
 
@@ -29,10 +30,10 @@ export default function LoginPage() {
         throw new Error(data.message || "Authentication failed");
       }
 
-      router.push("/overview");
+      router.push("/connect");
       router.refresh();
-    } catch (err: any) {
-      setError(err.message || "An unexpected error occurred");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "An unexpected error occurred");
     } finally {
       setLoading(false);
     }
@@ -53,10 +54,10 @@ export default function LoginPage() {
             <ShieldCheck className="w-6 h-6 text-white" />
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-white bg-clip-text text-transparent bg-gradient-to-r from-slate-100 to-slate-400">
-            AuthClaw Console
+            AuthClaw Lite
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            AI Governance & Compliance Platform App Shell
+            AI Governance Layer Demo
           </p>
         </div>
 
@@ -106,7 +107,7 @@ export default function LoginPage() {
                 className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-[#07070a]/80 border border-slate-800 text-slate-200 text-sm placeholder-slate-600 focus:outline-none focus:border-indigo-500/60 focus:ring-1 focus:ring-indigo-500/20 transition-all duration-200"
               />
             </div>
-            <p className="text-[10px] text-slate-500 mt-1.5">Use an AuthClaw API key issued by your administrator.</p>
+          <p className="text-[10px] text-slate-500 mt-1.5">Use an AuthClaw API key issued by your administrator.</p>
           </div>
 
           <button
@@ -127,6 +128,15 @@ export default function LoginPage() {
             )}
           </button>
         </form>
+
+        <div className="mt-6 pt-5 border-t border-slate-800/80 text-center">
+          <p className="text-xs text-slate-500">
+            New to AuthClaw?{" "}
+            <Link href="/signup" className="font-semibold text-indigo-300 hover:text-indigo-200">
+              Create a tenant
+            </Link>
+          </p>
+        </div>
       </div>
     </main>
   );

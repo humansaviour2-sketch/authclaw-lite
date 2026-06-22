@@ -11,11 +11,7 @@ else:
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from app.core.config import settings
-from app.db.base import Base
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -33,22 +29,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database setup
-engine = create_engine(
-    settings.DATABASE_URL,
-    echo=settings.DEBUG,
-    pool_pre_ping=True,
-)
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Create tables
-from sqlalchemy import text
-Base.metadata.create_all(bind=engine)
-with engine.connect() as conn:
-    conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_backup_codes VARCHAR[];"))
-    conn.commit()
-
 # Register Authentication & Tenant Context Middleware
 from app.core.auth import AuthMiddleware
 app.add_middleware(AuthMiddleware)
@@ -62,8 +42,14 @@ from app.api.v1.endpoints.audit import router as audit_router
 from app.api.v1.endpoints.workflows import router as workflows_router
 from app.api.v1.endpoints.users import router as users_router
 from app.api.v1.endpoints.apikeys import router as apikeys_router
+from app.api.v1.endpoints.provider_credentials import router as provider_credentials_router
+from app.api.v1.endpoints.onboarding import router as onboarding_router
 from app.api.v1.endpoints.chat import router as chat_router
 from app.api.v1.endpoints.aws import router as aws_router
+# Phase 16 — Evidence Repository
+from app.api.v1.endpoints.evidence import router as evidence_router
+# Phase 17 — Findings Dashboard
+from app.api.v1.endpoints.findings import router as findings_router
 
 app.include_router(tenants_router, prefix="/v1/tenants", tags=["tenants"])
 app.include_router(gateways_router, prefix="/v1/gateways", tags=["gateways"])
@@ -73,9 +59,15 @@ app.include_router(audit_router, prefix="/v1/audit-logs", tags=["audit-logs"])
 app.include_router(workflows_router, prefix="/v1/workflows", tags=["workflows"])
 app.include_router(users_router, prefix="/v1/users", tags=["users"])
 app.include_router(apikeys_router, prefix="/v1/api-keys", tags=["api-keys"])
+app.include_router(provider_credentials_router, prefix="/v1/provider-credentials", tags=["provider-credentials"])
+app.include_router(onboarding_router, prefix="/v1/onboarding", tags=["onboarding"])
 app.include_router(chat_router, prefix="/v1/chat", tags=["chat"])
 # Phase 14 — AWS Connector (gated behind AWS_ENABLED env flag at handler level)
 app.include_router(aws_router, prefix="/v1/aws", tags=["aws"])
+# Phase 16 — Evidence Repository
+app.include_router(evidence_router, prefix="/v1/evidence", tags=["evidence"])
+# Phase 17 — Findings Dashboard
+app.include_router(findings_router, prefix="/v1/findings", tags=["findings"])
 
 
 

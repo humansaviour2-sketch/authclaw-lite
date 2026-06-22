@@ -1,0 +1,146 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: authclaw-demo-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-authclaw}
+      POSTGRES_USER: ${POSTGRES_USER:-authclaw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-authclaw}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - demo_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-authclaw} -d ${POSTGRES_DB:-authclaw}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    container_name: authclaw-demo-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  opa:
+    image: openpolicyagent/opa:latest
+    container_name: authclaw-demo-opa
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "/policies"
+    volumes:
+      - ./infra/opa:/policies:ro
+    ports:
+      - "${OPA_PORT:-8181}:8181"
+
+  presidio:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    container_name: authclaw-demo-presidio
+    ports:
+      - "${PRESIDIO_PORT:-3000}:3000"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.demo
+    container_name: authclaw-demo-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      opa:
+        condition: service_started
+      presidio:
+        condition: service_started
+    environment:
+      OWNER_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-authclaw}:${POSTGRES_PASSWORD:-authclaw}@postgres:5432/${POSTGRES_DB:-authclaw}
+      APP_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER:-authclaw_app}:${POSTGRES_APP_PASSWORD:-authclaw_app}@postgres:5432/${POSTGRES_DB:-authclaw}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER:-authclaw_app}:${POSTGRES_APP_PASSWORD:-authclaw_app}@postgres:5432/${POSTGRES_DB:-authclaw}
+      POSTGRES_DB: ${POSTGRES_DB:-authclaw}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:-authclaw_app}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:-authclaw_app}
+      REDIS_URL: redis://redis:6379
+      OPA_URL: http://opa:8181
+      PRESIDIO_URL: http://presidio:3000
+      CLICKHOUSE_URL: ""
+      KAFKA_BROKERS: ""
+      API_DEBUG: "false"
+      AWS_ENABLED: ${AWS_ENABLED:-false}
+      BEDROCK_ENABLED: ${BEDROCK_ENABLED:-false}
+      AWS_SECRETS_MANAGER_ENABLED: ${AWS_SECRETS_MANAGER_ENABLED:-false}
+      JWT_SECRET: ${JWT_SECRET:-demo-change-me}
+      SESSION_SECRET: ${SESSION_SECRET:-demo-change-me}
+      ENVELOPE_KEY: ${ENVELOPE_KEY:-demo-local-envelope-key-change-me}
+      KMS_KEY_ID: ${KMS_KEY_ID:-demo-local-key}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    command: ["sh", "-c", "DATABASE_URL=\"$$OWNER_DATABASE_URL\" alembic upgrade head && DATABASE_URL=\"$$OWNER_DATABASE_URL\" python scripts/ensure_app_db_role.py && DATABASE_URL=\"$$APP_DATABASE_URL\" python -m uvicorn main:app --host 0.0.0.0 --port 8000"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile.demo
+    container_name: authclaw-demo-gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+      opa:
+        condition: service_started
+      presidio:
+        condition: service_started
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgresql://${POSTGRES_APP_USER:-authclaw_app}:${POSTGRES_APP_PASSWORD:-authclaw_app}@postgres:5432/${POSTGRES_DB:-authclaw}?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      OPA_URL: http://opa:8181
+      PRESIDIO_URL: http://presidio:3000
+      KAFKA_BROKERS: ""
+      ENVELOPE_KEY: ${ENVELOPE_KEY:-demo-local-envelope-key-change-me}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      COHERE_BASE_URL: ${COHERE_BASE_URL:-https://api.cohere.ai}
+      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      AWS_ENABLED: ${AWS_ENABLED:-false}
+      BEDROCK_ENABLED: ${BEDROCK_ENABLED:-false}
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+
+  console:
+    build:
+      context: ./console
+      dockerfile: Dockerfile.demo
+    container_name: authclaw-demo-console
+    depends_on:
+      backend:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_APP_USER:-authclaw_app}:${POSTGRES_APP_PASSWORD:-authclaw_app}@postgres:5432/${POSTGRES_DB:-authclaw}
+      API_URL: http://backend:8000
+      GATEWAY_INTERNAL_URL: http://gateway:8080
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:8080}
+      NEXT_PUBLIC_AUTHCLAW_DEMO_MODE: ${NEXT_PUBLIC_AUTHCLAW_DEMO_MODE:-true}
+      NODE_ENV: production
+    ports:
+      - "${CONSOLE_PORT:-3001}:3001"
+
+volumes:
+  demo_postgres_data:

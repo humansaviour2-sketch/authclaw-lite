@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 	"os"
+	"strings"
 
 	_ "github.com/lib/pq"
 )
@@ -15,6 +16,12 @@ func InitDB() {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		dbURL = "postgresql://authclaw:authclaw@localhost:5432/authclaw?sslmode=disable"
+	} else if !strings.Contains(dbURL, "sslmode") {
+		if strings.Contains(dbURL, "?") {
+			dbURL += "&sslmode=disable"
+		} else {
+			dbURL += "?sslmode=disable"
+		}
 	}
 
 	var err error

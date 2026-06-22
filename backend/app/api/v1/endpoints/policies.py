@@ -56,6 +56,21 @@ def validate_policy_yaml(yaml_str: str):
                 detail=f"Invalid regex pattern in regex_rules[{idx}]: {str(e)}"
             )
 
+        action = rule.get("action", "redact")
+        if action not in ("redact", "require_approval", "block"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"regex_rules[{idx}] action must be redact, require_approval, or block"
+            )
+
+        timeout = rule.get("hitl_timeout_seconds", 300)
+        if action == "require_approval":
+            if not isinstance(timeout, int) or timeout < 10 or timeout > 300:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"regex_rules[{idx}] hitl_timeout_seconds must be an integer between 10 and 300"
+                )
+
 
 @router.post("", response_model=PolicyResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_scopes(["write"])])
 def upload_policy(
@@ -119,22 +134,25 @@ def upload_policy(
 
 @router.get("", response_model=list[PolicyResponse], dependencies=[require_scopes(["read"])])
 def list_policies(
+    request: Request,
     db: Session = Depends(get_tenant_db)
 ):
     """List all policies for the tenant (including inactive/older versions)"""
-    return db.query(Policy).order_by(Policy.version.desc()).all()
+    tenant_id = request.state.tenant_id
+    return db.query(Policy).filter(Policy.tenant_id == tenant_id).order_by(Policy.version.desc()).all()
 
 
 @router.get("/active", response_model=PolicyDetailResponse, dependencies=[require_scopes(["read"])])
 def get_active_policy(
+    request: Request,
     db: Session = Depends(get_tenant_db)
 ):
     """Get the currently active policy for the tenant"""
-    policy = db.query(Policy).filter(Policy.is_active == True).first()
+    tenant_id = request.state.tenant_id
+    policy = db.query(Policy).filter(Policy.tenant_id == tenant_id, Policy.is_active == True).first()
     if not policy:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No active policy found"
         )
     return policy
-

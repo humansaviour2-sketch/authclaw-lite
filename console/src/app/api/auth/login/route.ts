@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createHash } from "crypto";
-import { query } from "@/lib/db";
+import { query, queryWithTenantContext } from "@/lib/db";
 import { sessionStore } from "@/lib/session-store";
 
 export async function POST(request: Request) {
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
     const { tenant_id: tenantId, scopes, created_by: userId } = res.rows[0];
 
     // Query tenant name
-    const tenantRes = await query("SELECT name FROM tenants WHERE id = $1", [tenantId]);
+    const tenantRes = await queryWithTenantContext(tenantId, "SELECT name FROM tenants WHERE id = $1", [tenantId]);
     const tenantName = tenantRes.rowCount && tenantRes.rowCount > 0 ? tenantRes.rows[0].name : "Default Tenant";
 
     // 3. Create server-side session

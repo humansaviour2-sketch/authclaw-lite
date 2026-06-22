@@ -21,8 +21,9 @@ var kafkaDLQWriter *kafka.Writer
 // If the variable is unset, producers are left nil and events fall back to stdout.
 func InitKafkaProducer() {
 	brokers := os.Getenv("KAFKA_BROKERS")
-	if brokers == "" {
-		brokers = "localhost:9092"
+	if strings.TrimSpace(brokers) == "" {
+		log.Println("Kafka producers disabled; audit events will use local fallbacks")
+		return
 	}
 
 	brokerList := strings.Split(brokers, ",")

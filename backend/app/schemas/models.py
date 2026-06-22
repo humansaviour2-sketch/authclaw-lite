@@ -28,7 +28,7 @@ class UserCreate(BaseModel):
     """Schema for creating a user"""
     email: EmailStr
     password: str = Field(..., min_length=8)
-    role: str = Field(default="viewer", pattern="^(admin|operator|viewer)$")
+    role: str = Field(default="viewer", pattern="^(owner|admin|developer|operator|viewer)$")
 
 
 class UserResponse(BaseModel):
@@ -118,6 +118,80 @@ class GatewayConfigResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ProviderCredentialCreate(BaseModel):
+    """Create or rotate a model provider credential."""
+    provider: str = Field(..., pattern="^(openai|anthropic|cohere|azure_openai|gemini)$")
+    display_name: str = Field(..., min_length=1, max_length=255)
+    api_key: str = Field(..., min_length=8)
+    endpoint: Optional[str] = Field(default=None, max_length=512)
+
+
+class ProviderCredentialResponse(BaseModel):
+    """Provider credential metadata. Raw secret is never returned."""
+    id: UUID
+    provider: str
+    display_name: str
+    endpoint: Optional[str] = None
+    auth_scheme: str
+    status: str
+    last_verified_at: Optional[datetime] = None
+    created_at: datetime
+    rotated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class OnboardingSignupRequest(BaseModel):
+    """Start Lite self-service onboarding by sending an email OTP."""
+    email: EmailStr
+    tenant_name: str = Field(..., min_length=2, max_length=255)
+
+
+class OnboardingSignupResponse(BaseModel):
+    """Signup OTP request response."""
+    signup_id: UUID
+    email: EmailStr
+    tenant_name: str
+    expires_at: datetime
+    delivery: str
+    dev_otp: Optional[str] = None
+
+
+class OnboardingVerifyRequest(BaseModel):
+    """Verify email OTP and bootstrap the first tenant."""
+    signup_id: UUID
+    otp: str = Field(..., min_length=6, max_length=6)
+
+
+class OnboardingChecklistResponse(BaseModel):
+    """Tenant onboarding checklist state."""
+    email_verified: bool
+    tenant_created: bool
+    api_key_issued: bool
+    provider_key_saved: bool
+    route_created: bool
+    policy_created: bool
+    snippet_viewed: bool
+    current_step: str
+
+
+class OnboardingVerifyResponse(BaseModel):
+    """Verified signup response including the first AuthClaw gateway key."""
+    tenant_id: UUID
+    tenant_name: str
+    user_id: UUID
+    email: EmailStr
+    role: str
+    api_key: str
+    gateway_url: str
+    provider: str
+    model: str
+    checklist: OnboardingChecklistResponse
+    powershell_snippet: str
+    curl_snippet: str
 
 
 class RedactionTokenMapResponse(BaseModel):

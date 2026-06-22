@@ -349,14 +349,28 @@ def test_workflow_approval_integration(client: TestClient, db_session: Session):
     headers = {"Authorization": f"Bearer {api_key_raw}"}
 
     # 2. Create compliance workflow (scan executes to completion)
-    response = client.post(
-        "/v1/workflows",
-        headers=headers,
-        json={"framework": "HIPAA"}
-    )
-    assert response.status_code == status.HTTP_201_CREATED
-    wf_data = response.json()
-    workflow_id = wf_data["workflow_id"]
+    from unittest.mock import patch, MagicMock
+    
+    with patch("app.orchestrator.connectors.DocumentScanner.list_documents") as mock_list, \
+         patch("app.orchestrator.connectors.DocumentScanner.fetch_and_extract_text") as mock_fetch, \
+         patch("requests.post") as mock_post:
+         
+        mock_list.return_value = [{"object_key": "test-doc.txt", "file_name": "test-doc.txt", "size": 1024}]
+        mock_fetch.return_value = "My email is john@example.com"
+        
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = [{"entity_type": "EMAIL_ADDRESS"}]
+        mock_post.return_value = mock_resp
+
+        response = client.post(
+            "/v1/workflows",
+            headers=headers,
+            json={"framework": "HIPAA"}
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        wf_data = response.json()
+        workflow_id = wf_data["workflow_id"]
     
     assert wf_data["current_state"] == "COMPLETE"
     assert wf_data["execution_status"] == "COMPLETED"
@@ -366,6 +380,8 @@ def test_workflow_approval_integration(client: TestClient, db_session: Session):
         f"/v1/workflows/{workflow_id}/remediate",
         headers=headers
     )
+    if response_remediate.status_code != status.HTTP_200_OK:
+        print(f"REMEDIATION ERROR: {response_remediate.json()}")
     assert response_remediate.status_code == status.HTTP_200_OK
     wf_remediate_data = response_remediate.json()
     approval_id = wf_remediate_data["approval_id"]

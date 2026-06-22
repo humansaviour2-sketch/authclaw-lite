@@ -39,6 +39,7 @@ isort>=5.13.2
 # Utilities
 python-dotenv>=1.0.1
 requests>=2.31.0
+redis>=5.0.0
 
 # Phase 7 — Audit backbone
 clickhouse-connect>=0.7.0

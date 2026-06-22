@@ -1,6 +1,7 @@
 """Cryptographic utilities for token decryption"""
 import base64
 import os
+import hashlib
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 
@@ -46,3 +47,19 @@ def decrypt_deterministic(ciphertext_str: str) -> str:
         return padded_plaintext[:-padding_len].decode("utf-8")
     except Exception as e:
         raise ValueError(f"Failed to decrypt value: {str(e)}")
+
+
+def _pkcs7_pad(data: bytes) -> bytes:
+    padding = 16 - (len(data) % 16)
+    return data + bytes([padding]) * padding
+
+
+def encrypt_deterministic(plaintext: str) -> str:
+    """Encrypts plaintext using the AES-CBC format the Go gateway can decrypt."""
+    key = get_encryption_key()
+    plaintext_bytes = plaintext.encode("utf-8")
+    iv = hashlib.sha256(plaintext_bytes + key).digest()[:16]
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    encryptor = cipher.encryptor()
+    ciphertext = encryptor.update(_pkcs7_pad(plaintext_bytes)) + encryptor.finalize()
+    return base64.b64encode(iv + ciphertext).decode("utf-8")

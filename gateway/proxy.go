@@ -125,6 +125,7 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Extract tenant ID and request ID from context (injected by AuthMiddleware)
 	tenantID, _ := r.Context().Value(TenantIDContextKey).(string)
 	requestID, _ := r.Context().Value(RequestIDContextKey).(string)
+	requesterID, _ := r.Context().Value(UserIDContextKey).(string)
 
 	// Determine provider
 	targetURLStr := p.RouteRequest(r)
@@ -145,6 +146,16 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		provider = "bedrock"
 	}
 
+	providerCredential, credentialErr := LoadProviderCredential(r.Context(), tenantID, provider)
+	if credentialErr != nil {
+		log.Printf("Provider credential load failed: %v", credentialErr)
+		http.Error(w, "Provider credential could not be loaded", http.StatusBadGateway)
+		return
+	}
+	if providerCredential != nil && providerCredential.Endpoint != "" {
+		targetURLStr = providerCredential.Endpoint
+	}
+
 	// Extract and normalize request details
 	var model string
 	var promptCount int
@@ -162,6 +173,110 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var customRules []RegexRule
 	if config != nil {
 		customRules = config.RegexRules
+	}
+
+	if normalized != nil && len(normalized.Prompts) > 0 {
+		blockMatch, blockMatchErr := FindBlockingRuleMatch(config, normalized.Prompts)
+		if blockMatchErr != nil {
+			log.Printf("Custom block rule evaluation failed: %v", blockMatchErr)
+			http.Error(w, "Request blocked: custom policy evaluation failed", http.StatusForbidden)
+			EmitAuditEvent(&AuditEvent{
+				ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
+				TenantID: tenantID, PolicyID: policyID, Action: "block",
+				DecisionReason: "Custom block policy evaluation failed", Provider: provider, Model: model,
+				PromptCount: promptCount, RequestSize: int(r.ContentLength),
+				ResponseStatus: http.StatusForbidden, DurationMs: 0,
+			})
+			return
+		}
+		if blockMatch != nil {
+			reason := blockMatch.Rule.Reason
+			if reason == "" {
+				reason = fmt.Sprintf("Custom policy rule '%s' blocked request", blockMatch.Rule.Name)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(fmt.Sprintf(`{"error":"PolicyBlocked","message":"%s"}`, reason)))
+			EmitAuditEvent(&AuditEvent{
+				ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
+				TenantID: tenantID, PolicyID: policyID, Action: "block",
+				DecisionReason: reason, Provider: provider, Model: model,
+				PromptCount: promptCount, RequestSize: int(r.ContentLength),
+				ResponseStatus: http.StatusForbidden, DurationMs: 0,
+			})
+			return
+		}
+	}
+
+	// HITL gate for high-risk custom redaction policies.
+	// This runs before redaction and before provider egress. The prompt itself is not
+	// stored in the approval payload; only hashes and policy metadata are stored.
+	if normalized != nil && len(normalized.Prompts) > 0 {
+		approvalMatch, approvalMatchErr := FindApprovalRuleMatch(config, normalized.Prompts)
+		if approvalMatchErr != nil {
+			log.Printf("HITL rule evaluation failed: %v", approvalMatchErr)
+			http.Error(w, "Request blocked: approval policy evaluation failed", http.StatusForbidden)
+			EmitAuditEvent(&AuditEvent{
+				ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
+				TenantID: tenantID, PolicyID: policyID, Action: "block",
+				DecisionReason: "HITL policy evaluation failed", Provider: provider, Model: model,
+				PromptCount: promptCount, RequestSize: int(r.ContentLength),
+				ResponseStatus: http.StatusForbidden, DurationMs: 0,
+			})
+			return
+		}
+		if approvalMatch != nil {
+			approvalID, timeout, approvalErr := CreateGatewayApproval(
+				r.Context(), tenantID, requesterID, requestID, provider, model, normalized.Prompts, approvalMatch,
+			)
+			if approvalErr != nil {
+				log.Printf("Failed to create gateway approval: %v", approvalErr)
+				http.Error(w, "Request blocked: failed to create human approval", http.StatusForbidden)
+				EmitAuditEvent(&AuditEvent{
+					ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
+					TenantID: tenantID, PolicyID: policyID, Action: "block",
+					DecisionReason: "Failed to create HITL approval", Provider: provider, Model: model,
+					PromptCount: promptCount, RequestSize: int(r.ContentLength),
+					ResponseStatus: http.StatusForbidden, DurationMs: 0,
+				})
+				return
+			}
+
+			log.Printf("[HITL] approval_id=%s request_id=%s rule=%s timeout=%s", approvalID, requestID, approvalMatch.Rule.Name, timeout)
+			status, waitErr := WaitForGatewayApproval(r.Context(), tenantID, approvalID, timeout)
+			if waitErr != nil {
+				log.Printf("Gateway approval wait failed: %v", waitErr)
+				http.Error(w, "Request blocked: human approval wait failed", http.StatusForbidden)
+				EmitAuditEvent(&AuditEvent{
+					ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
+					TenantID: tenantID, PolicyID: policyID, Action: "block",
+					DecisionReason: "HITL approval wait failed", Provider: provider, Model: model,
+					PromptCount: promptCount, RequestSize: int(r.ContentLength),
+					ResponseStatus: http.StatusForbidden, DurationMs: 0,
+				})
+				return
+			}
+			if status != "APPROVED" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(fmt.Sprintf(`{"error":"ApprovalRequired","message":"Request blocked: HITL approval status is %s","approval_id":"%s"}`, status, approvalID)))
+				EmitAuditEvent(&AuditEvent{
+					ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
+					TenantID: tenantID, PolicyID: policyID, Action: "block",
+					DecisionReason: fmt.Sprintf("HITL approval %s", status), Provider: provider, Model: model,
+					PromptCount: promptCount, RequestSize: int(r.ContentLength),
+					ResponseStatus: http.StatusForbidden, DurationMs: 0,
+				})
+				return
+			}
+			EmitAuditEvent(&AuditEvent{
+				ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
+				TenantID: tenantID, PolicyID: policyID, Action: "approval_allow",
+				DecisionReason: fmt.Sprintf("HITL approved: %s", approvalMatch.Rule.Reason),
+				Provider:       provider, Model: model, PromptCount: promptCount,
+				RequestSize: int(r.ContentLength), ResponseStatus: http.StatusOK, DurationMs: 0,
+			})
+		}
 	}
 
 	// Inbound Prompt Redaction
@@ -267,12 +382,31 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if provider == "gemini" {
 			// Existing Gemini auth — UNCHANGED
 			req.Header.Del("Authorization")
-			geminiKey := os.Getenv("GEMINI_API_KEY")
+			geminiKey := ""
+			if providerCredential != nil {
+				geminiKey = providerCredential.APIKey
+			}
+			if geminiKey == "" {
+				geminiKey = os.Getenv("GEMINI_API_KEY")
+			}
 			if geminiKey != "" {
 				req.Header.Set("x-goog-api-key", geminiKey)
 				q := req.URL.Query()
 				q.Set("key", geminiKey)
 				req.URL.RawQuery = q.Encode()
+			}
+		} else if provider == "anthropic" {
+			req.Header.Del("Authorization")
+			if providerCredential != nil && providerCredential.APIKey != "" {
+				req.Header.Set("x-api-key", providerCredential.APIKey)
+				if req.Header.Get("anthropic-version") == "" {
+					req.Header.Set("anthropic-version", "2023-06-01")
+				}
+			}
+		} else if provider == "cohere" || provider == "openai" {
+			req.Header.Del("Authorization")
+			if providerCredential != nil && providerCredential.APIKey != "" {
+				req.Header.Set("Authorization", "Bearer "+providerCredential.APIKey)
 			}
 		} else if provider == "bedrock" {
 			// Phase 14: AWS SigV4 signing for Bedrock

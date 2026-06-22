@@ -7,13 +7,8 @@ import {
   Trash2, 
   Edit, 
   Activity, 
-  Eye, 
   EyeOff, 
-  Check, 
   AlertTriangle,
-  Play,
-  Settings,
-  HelpCircle,
   X,
   ShieldCheck,
   Clock
@@ -39,6 +34,10 @@ interface AuditLog {
   reason: string;
   response_status: number;
   duration_ms: number;
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
 }
 
 export default function GatewayPage() {
@@ -75,9 +74,10 @@ export default function GatewayPage() {
       const data = await res.json();
       setRoutes(data);
       setError(null);
-    } catch (err: any) {
-      console.warn("Gateway fetchRoutes failed:", err.message);
-      setError(err.message || "Failed to load gateway configurations");
+    } catch (err: unknown) {
+      const message = errorMessage(err, "Failed to load gateway configurations");
+      console.warn("Gateway fetchRoutes failed:", message);
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -94,19 +94,25 @@ export default function GatewayPage() {
       const data = await res.json();
       setTraffic(data.records || []);
       setTrafficError(null);
-    } catch (err: any) {
-      console.warn("Gateway fetchTraffic failed:", err.message);
-      setTrafficError(err.message || "Failed to load live traffic logs");
+    } catch (err: unknown) {
+      const message = errorMessage(err, "Failed to load live traffic logs");
+      console.warn("Gateway fetchTraffic failed:", message);
+      setTrafficError(message);
     } finally {
       setTrafficLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchRoutes();
-    fetchTraffic();
+    const initialFetch = window.setTimeout(() => {
+      void fetchRoutes();
+      void fetchTraffic();
+    }, 0);
     const interval = setInterval(fetchTraffic, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      window.clearTimeout(initialFetch);
+      clearInterval(interval);
+    };
   }, []);
 
   const openAddModal = () => {
@@ -196,8 +202,8 @@ export default function GatewayPage() {
 
       await fetchRoutes();
       setIsModalOpen(false);
-    } catch (err: any) {
-      setFormError(err.message || "An unexpected error occurred");
+    } catch (err: unknown) {
+      setFormError(errorMessage(err, "An unexpected error occurred"));
     } finally {
       setSubmitting(false);
     }
@@ -209,8 +215,8 @@ export default function GatewayPage() {
       const res = await fetch(`/api/gateways/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete gateway");
       setRoutes(routes.filter((r) => r.id !== id));
-    } catch (err: any) {
-      alert(err.message || "Could not delete route");
+    } catch (err: unknown) {
+      alert(errorMessage(err, "Could not delete route"));
     }
   };
 
@@ -220,10 +226,10 @@ export default function GatewayPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-extrabold tracking-tight text-white bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
-            Gateway Configurator
+            Governance Gateway
           </h1>
           <p className="text-slate-400 text-sm mt-1">
-            Intercept LLM request traffic, govern provider models, and enforce real-time redaction.
+            Configure provider-compatible routes that customer apps call through the AuthClaw URL.
           </p>
         </div>
         <button 
@@ -231,7 +237,7 @@ export default function GatewayPage() {
           className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg transition active:scale-[0.98]"
         >
           <Plus className="w-4 h-4" />
-          Add Gateway Route
+          Add Provider Route
         </button>
       </div>
 
@@ -244,7 +250,7 @@ export default function GatewayPage() {
           }`}
         >
           {activeTab === "routes" && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500 rounded-full" />}
-          Gateway Routes
+          Provider Routes
         </button>
         <button
           onClick={() => setActiveTab("inspector")}
@@ -285,15 +291,15 @@ export default function GatewayPage() {
               <div className="w-12 h-12 rounded-xl bg-slate-800/40 border border-slate-700/60 flex items-center justify-center mb-4 text-indigo-400">
                 <Cpu className="w-6 h-6" />
               </div>
-              <h3 className="text-lg font-semibold text-slate-200">No Gateway Routes Configured</h3>
+              <h3 className="text-lg font-semibold text-slate-200">No Provider Routes Configured</h3>
               <p className="text-slate-500 text-xs max-w-sm mt-2">
-                Configure your first LLM provider gateway route (OpenAI, Anthropic, etc.) to start proxying traffic.
+                Configure the first model provider route before sending chatbot traffic through AuthClaw.
               </p>
               <button 
                 onClick={openAddModal}
                 className="mt-6 px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-semibold text-slate-200 transition"
               >
-                Configure First Route
+                Configure First Provider
               </button>
             </div>
           ) : (
@@ -466,7 +472,7 @@ export default function GatewayPage() {
             
             <div className="flex justify-between items-center mb-6 border-b border-slate-800/80 pb-3">
               <h3 className="text-base font-bold text-white">
-                {modalMode === "add" ? "Register Gateway Route" : "Edit Gateway Route"}
+                {modalMode === "add" ? "Register Provider Route" : "Edit Provider Route"}
               </h3>
               <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white transition">
                 <X className="w-5 h-5" />

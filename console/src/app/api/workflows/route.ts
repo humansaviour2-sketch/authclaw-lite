@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { query } from "@/lib/db";
+import { queryWithTenantContext } from "@/lib/db";
 import { backendFetch, handleApiError } from "@/lib/api-client";
 import { sessionStore } from "@/lib/session-store";
 
@@ -23,13 +23,15 @@ export async function GET() {
     const tenantId = payload.tenantId;
 
     // Fetch compliance workflows
-    const workflowsRes = await query(
+    const workflowsRes = await queryWithTenantContext(
+      tenantId,
       "SELECT id, workflow_id, framework, current_state, execution_status, risk_score, started_at, completed_at, approval_id FROM compliance_workflows WHERE tenant_id = $1 ORDER BY started_at DESC LIMIT 50",
       [tenantId]
     );
 
     // Fetch pending approvals
-    const approvalsRes = await query(
+    const approvalsRes = await queryWithTenantContext(
+      tenantId,
       "SELECT id, action_id, action_type, action_description, status, expires_at, created_at FROM pending_approvals WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 50",
       [tenantId]
     );

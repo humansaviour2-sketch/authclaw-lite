@@ -17,6 +17,7 @@ const (
 	TenantIDContextKey  contextKey = "tenant_id"
 	ScopesContextKey    contextKey = "scopes"
 	RequestIDContextKey contextKey = "request_id"
+	UserIDContextKey    contextKey = "user_id"
 )
 
 // generateRequestID creates a random 16-byte hex request identifier.
@@ -56,12 +57,13 @@ func AuthMiddleware(next http.Handler) http.Handler {
 
 		// 2. Query DB to validate key and retrieve tenant_id
 		var tenantID string
+		var userID string
 		var scopes []string
 
 		err := DB.QueryRow(
-			"SELECT tenant_id, scopes FROM resolve_api_key($1)",
+			"SELECT tenant_id, scopes, created_by FROM resolve_api_key($1)",
 			keyHash,
-		).Scan(&tenantID, pq.Array(&scopes))
+		).Scan(&tenantID, pq.Array(&scopes), &userID)
 
 		if err != nil {
 			http.Error(w, "Unauthorized: Invalid or expired API Key", http.StatusUnauthorized)
@@ -79,6 +81,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), TenantIDContextKey, tenantID)
 		ctx = context.WithValue(ctx, ScopesContextKey, scopes)
 		ctx = context.WithValue(ctx, RequestIDContextKey, requestID)
+		ctx = context.WithValue(ctx, UserIDContextKey, userID)
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

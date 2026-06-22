@@ -65,6 +65,34 @@ class RecoveryResponse(BaseModel):
     results: list
 
 
+class GatewayApprovalResponse(BaseModel):
+    id: str
+    action_id: str
+    action_type: str
+    action_description: str
+    action_payload: dict
+    status: str
+    requester_id: str
+    approver_id: Optional[str] = None
+    expires_at: str
+    created_at: str
+
+
+def _approval_response(approval: PendingApproval) -> GatewayApprovalResponse:
+    return GatewayApprovalResponse(
+        id=str(approval.id),
+        action_id=approval.action_id,
+        action_type=approval.action_type,
+        action_description=approval.action_description,
+        action_payload=approval.action_payload or {},
+        status=approval.status,
+        requester_id=str(approval.requester_id),
+        approver_id=str(approval.approver_id) if approval.approver_id else None,
+        expires_at=approval.expires_at.isoformat(),
+        created_at=approval.created_at.isoformat(),
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Endpoints
 # ──────────────────────────────────────────────────────────────────────────────
@@ -98,25 +126,6 @@ def create_workflow(
     except Exception as exc:
         logger.error("Failed to create workflow: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
-
-
-@router.get("/{workflow_id}", response_model=WorkflowResponse)
-def get_workflow(
-    workflow_id: str,
-    request: Request,
-    db: Session = Depends(get_tenant_db),
-    _auth=require_scopes(["read"]),
-):
-    """Get workflow status by ID."""
-    tenant_id = str(request.state.tenant_id)
-
-    runner = ComplianceWorkflowRunner(db)
-    result = runner.get_status(workflow_id, tenant_id)
-
-    if not result:
-        raise HTTPException(status_code=404, detail="Workflow not found")
-
-    return WorkflowResponse(**result)
 
 
 @router.post("/{workflow_id}/resume", response_model=WorkflowResponse)
@@ -225,6 +234,102 @@ def expire_stale_approvals(
         _auto_expire_stale(db, tenant_id, user_id)
         
     return {"expired_count": expired_count}
+
+
+@router.get("/approvals", response_model=list[GatewayApprovalResponse])
+def list_gateway_approvals(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    _auth=require_scopes(["read"]),
+):
+    """List gateway HITL approvals for AuthClaw Lite."""
+    tenant_id = str(request.state.tenant_id)
+    approvals = db.query(PendingApproval).filter(
+        PendingApproval.tenant_id == uuid.UUID(tenant_id),
+        PendingApproval.action_type == "gateway_policy_egress",
+    ).order_by(PendingApproval.created_at.desc()).limit(50).all()
+    return [_approval_response(approval) for approval in approvals]
+
+
+@router.post("/approvals/{approval_id}/approve", response_model=GatewayApprovalResponse)
+def approve_gateway_approval(
+    approval_id: str,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    _auth=require_scopes(["admin"]),
+):
+    """Approve a gateway HITL approval so the waiting request may continue."""
+    tenant_id = str(request.state.tenant_id)
+    user_id = request.state.user_id
+    _auto_expire_stale(db, tenant_id, user_id)
+
+    approval = db.query(PendingApproval).filter(
+        PendingApproval.tenant_id == uuid.UUID(tenant_id),
+        PendingApproval.id == uuid.UUID(approval_id),
+        PendingApproval.action_type == "gateway_policy_egress",
+    ).first()
+    if not approval:
+        raise HTTPException(status_code=404, detail="Approval not found")
+    if approval.status != "PENDING":
+        raise HTTPException(status_code=400, detail=f"Approval already resolved: {approval.status}")
+
+    approval.status = "APPROVED"
+    approval.approver_id = user_id
+    approval.approved_at = datetime.now(timezone.utc)
+    approval.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(approval)
+    return _approval_response(approval)
+
+
+@router.post("/approvals/{approval_id}/reject", response_model=GatewayApprovalResponse)
+def reject_gateway_approval(
+    approval_id: str,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    _auth=require_scopes(["admin"]),
+):
+    """Reject a gateway HITL approval so the waiting request is blocked."""
+    tenant_id = str(request.state.tenant_id)
+    user_id = request.state.user_id
+    _auto_expire_stale(db, tenant_id, user_id)
+
+    approval = db.query(PendingApproval).filter(
+        PendingApproval.tenant_id == uuid.UUID(tenant_id),
+        PendingApproval.id == uuid.UUID(approval_id),
+        PendingApproval.action_type == "gateway_policy_egress",
+    ).first()
+    if not approval:
+        raise HTTPException(status_code=404, detail="Approval not found")
+    if approval.status != "PENDING":
+        raise HTTPException(status_code=400, detail=f"Approval already resolved: {approval.status}")
+
+    approval.status = "REJECTED"
+    approval.approver_id = user_id
+    approval.approved_at = datetime.now(timezone.utc)
+    approval.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(approval)
+    return _approval_response(approval)
+
+
+@router.get("/{workflow_id}", response_model=WorkflowResponse)
+def get_workflow(
+    workflow_id: str,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    _auth=require_scopes(["read"]),
+):
+    """Get workflow status by ID."""
+    tenant_id = str(request.state.tenant_id)
+
+    runner = ComplianceWorkflowRunner(db)
+    result = runner.get_status(workflow_id, tenant_id)
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+
+    return WorkflowResponse(**result)
 
 
 @router.post("/{workflow_id}/approve", response_model=WorkflowResponse)

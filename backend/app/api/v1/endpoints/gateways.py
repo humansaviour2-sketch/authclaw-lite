@@ -55,10 +55,12 @@ def register_gateway(
 @router.get("/{id}/config", response_model=GatewayConfigResponse, dependencies=[require_scopes(["read"])])
 def get_gateway_config(
     id: UUID,
+    request: Request,
     db: Session = Depends(get_tenant_db)
 ):
     """Retrieve gateway routing configuration (isolated by tenant RLS)"""
-    gateway = db.query(GatewayConfig).filter(GatewayConfig.id == id).first()
+    tenant_id = request.state.tenant_id
+    gateway = db.query(GatewayConfig).filter(GatewayConfig.tenant_id == tenant_id, GatewayConfig.id == id).first()
     if not gateway:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -69,20 +71,24 @@ def get_gateway_config(
 
 @router.get("", response_model=list[GatewayConfigResponse], dependencies=[require_scopes(["read"])])
 def list_gateways(
+    request: Request,
     db: Session = Depends(get_tenant_db)
 ):
     """List all gateway configurations for the tenant (isolated by tenant RLS)"""
-    return db.query(GatewayConfig).all()
+    tenant_id = request.state.tenant_id
+    return db.query(GatewayConfig).filter(GatewayConfig.tenant_id == tenant_id).all()
 
 
 @router.put("/{id}", response_model=GatewayConfigResponse, dependencies=[require_scopes(["write"])])
 def update_gateway(
     id: UUID,
     gateway_in: GatewayConfigCreate,
+    request: Request,
     db: Session = Depends(get_tenant_db)
 ):
     """Update a gateway configuration for the tenant"""
-    gateway = db.query(GatewayConfig).filter(GatewayConfig.id == id).first()
+    tenant_id = request.state.tenant_id
+    gateway = db.query(GatewayConfig).filter(GatewayConfig.tenant_id == tenant_id, GatewayConfig.id == id).first()
     if not gateway:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -101,10 +107,12 @@ def update_gateway(
 @router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_scopes(["write"])])
 def delete_gateway(
     id: UUID,
+    request: Request,
     db: Session = Depends(get_tenant_db)
 ):
     """Delete a gateway configuration for the tenant"""
-    gateway = db.query(GatewayConfig).filter(GatewayConfig.id == id).first()
+    tenant_id = request.state.tenant_id
+    gateway = db.query(GatewayConfig).filter(GatewayConfig.tenant_id == tenant_id, GatewayConfig.id == id).first()
     if not gateway:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -112,4 +120,3 @@ def delete_gateway(
         )
     db.delete(gateway)
     db.commit()
-

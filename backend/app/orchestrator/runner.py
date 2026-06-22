@@ -27,6 +27,8 @@ from app.orchestrator.graph import (
     execute_remediation,
     verify_results,
 )
+# Phase 16 & 17: evidence & findings services — imported here in the runner, never in graph nodes
+from app.services import evidence_service, findings_service
 
 logger = logging.getLogger("orchestrator.runner")
 
@@ -154,7 +156,10 @@ def _create_approval_in_db(
     approval_id = str(uuid.uuid4())
 
     # Set tenant context for RLS before querying users table
-    db.execute(text("SET app.current_tenant_id = :tid"), {"tid": tenant_id})
+    db.execute(
+        text("SELECT set_config('app.current_tenant_id', :tid, false)"),
+        {"tid": tenant_id},
+    )
 
     # Look up a valid user_id for the requester (use first active user in tenant)
     result = db.execute(
@@ -177,10 +182,81 @@ def _create_approval_in_db(
 
     db.add(approval)
     db.commit()
-    db.execute(text("SET app.current_tenant_id = ''"))
+    db.execute(text("SELECT set_config('app.current_tenant_id', '', false)"))
 
     logger.info("Created approval %s for workflow %s", approval_id, workflow_id)
     return approval_id
+
+
+def _make_store_evidence_fn(db: Session):
+    """
+    Return a closure that matches the _store_evidence callback signature expected
+    by graph nodes.  The closure forwards to evidence_service.create_evidence()
+    and is entirely non-fatal — a failure here must never break the workflow.
+
+    Signature passed to graph state:
+      store_fn(tenant_id, workflow_id, framework, source_type, source_reference,
+               evidence_type, evidence_data, severity) -> None
+    """
+    def _store(tenant_id, workflow_id, framework, source_type, source_reference,
+               evidence_type, evidence_data, severity="info"):
+        try:
+            evidence_service.create_evidence(
+                db,
+                tenant_id=tenant_id,
+                workflow_id=workflow_id,
+                framework=framework,
+                source_type=source_type,
+                source_reference=source_reference,
+                evidence_type=evidence_type,
+                evidence_data=evidence_data,
+                severity=severity,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[evidence] create_evidence failed (non-fatal) workflow=%s: %s",
+                workflow_id, exc,
+            )
+    return _store
+
+
+def _make_store_finding_fn(db: Session):
+    def _store(tenant_id, workflow_id, evidence_id, framework, finding_type, source_reference, title, description, severity="medium", status="OPEN", risk_score=0.0, remediation_summary=None):
+        try:
+            # Look up EvidenceRecord to ensure tight traceability
+            if not evidence_id:
+                from app.db.models import EvidenceRecord
+                import uuid
+                evidence = db.query(EvidenceRecord).filter_by(
+                    tenant_id=uuid.UUID(tenant_id),
+                    workflow_id=workflow_id,
+                    source_reference=source_reference
+                ).order_by(EvidenceRecord.created_at.desc()).first()
+                
+                if evidence:
+                    evidence_id = str(evidence.id)
+
+            findings_service.create_finding(
+                db,
+                tenant_id=tenant_id,
+                workflow_id=workflow_id,
+                evidence_id=evidence_id,
+                framework=framework,
+                finding_type=finding_type,
+                source_reference=source_reference,
+                title=title,
+                description=description,
+                severity=severity,
+                status=status,
+                risk_score=risk_score,
+                remediation_summary=remediation_summary
+            )
+        except Exception as exc:
+            logger.warning(
+                "[finding] create_finding failed (non-fatal) workflow=%s: %s",
+                workflow_id, exc,
+            )
+    return _store
 
 
 def _check_approval_in_db(db: Session, approval_id: str) -> str:
@@ -241,10 +317,13 @@ class ComplianceWorkflowRunner:
         )
 
         # Set tenant context for RLS, create record, then clear
-        self.db.execute(text("SET app.current_tenant_id = :tid"), {"tid": tenant_id})
+        self.db.execute(
+            text("SELECT set_config('app.current_tenant_id', :tid, false)"),
+            {"tid": tenant_id},
+        )
         self.db.add(db_workflow)
         self.db.commit()
-        self.db.execute(text("SET app.current_tenant_id = ''"))
+        self.db.execute(text("SELECT set_config('app.current_tenant_id', '', false)"))
 
         emit_audit_event(workflow_id, tenant_id, request_id or "",
                          "START→GATHER_EVIDENCE", "workflow_start", "running")
@@ -272,6 +351,10 @@ class ComplianceWorkflowRunner:
             "_persist_state": lambda s: _persist_state_to_db(self.db, s),
             "_create_approval": lambda tid, wid, plan: _create_approval_in_db(self.db, tid, wid, plan),
             "_check_approval": lambda aid: _check_approval_in_db(self.db, aid),
+            # Phase 16: evidence callback — injected here, never imported by graph nodes
+            "_store_evidence": _make_store_evidence_fn(self.db),
+            # Phase 17: findings callback
+            "_store_finding": _make_store_finding_fn(self.db),
         }
 
         # Execute the graph
@@ -335,6 +418,10 @@ class ComplianceWorkflowRunner:
                 "_persist_state": lambda s: _persist_state_to_db(self.db, s),
                 "_create_approval": lambda tid, wid, plan: _create_approval_in_db(self.db, tid, wid, plan),
                 "_check_approval": lambda aid: _check_approval_in_db(self.db, aid),
+                # Phase 16: re-inject evidence callback on resume
+                "_store_evidence": _make_store_evidence_fn(self.db),
+                # Phase 17: re-inject findings callback on resume
+                "_store_finding": _make_store_finding_fn(self.db),
             }
 
             emit_audit_event(workflow_id, tenant_id, state.get("request_id", ""),

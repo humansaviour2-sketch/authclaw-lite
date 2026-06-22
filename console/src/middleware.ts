@@ -3,9 +3,11 @@ import type { NextRequest } from "next/server";
 
 export function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
+  const demoMode = process.env.NEXT_PUBLIC_AUTHCLAW_DEMO_MODE !== "false";
+  const demoBlockedPaths = ["/agent", "/frameworks", "/evidence", "/findings", "/aws"];
   
   // 1. Define public and asset paths
-  const isPublicPath = path === "/login" || path.startsWith("/api/auth");
+  const isPublicPath = path === "/login" || path === "/signup" || path.startsWith("/api/auth");
   const isAssetPath =
     path.startsWith("/_next") ||
     path.startsWith("/favicon.ico") ||
@@ -25,13 +27,21 @@ export function middleware(request: NextRequest) {
   }
 
   if (sessionCookie && path === "/login") {
-    // Redirect authenticated user away from login to overview dashboard
-    return NextResponse.redirect(new URL("/overview", request.url));
+    // Redirect authenticated user away from login to the demo onboarding flow
+    return NextResponse.redirect(new URL("/connect", request.url));
+  }
+
+  if (sessionCookie && path === "/signup") {
+    return NextResponse.redirect(new URL("/connect", request.url));
   }
 
   if (sessionCookie && path === "/") {
-    // Redirect root to overview dashboard
-    return NextResponse.redirect(new URL("/overview", request.url));
+    // Redirect root to the demo onboarding flow
+    return NextResponse.redirect(new URL("/connect", request.url));
+  }
+
+  if (demoMode && demoBlockedPaths.some((blockedPath) => path === blockedPath || path.startsWith(`${blockedPath}/`))) {
+    return NextResponse.redirect(new URL("/connect", request.url));
   }
 
   return NextResponse.next();

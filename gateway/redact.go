@@ -18,6 +18,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ import (
 
 // Context keys
 type contextKeyType string
+
 const RequestTokenMapKey contextKeyType = "request_token_map"
 
 // Presidio structures
@@ -88,7 +90,7 @@ func (c *PresidioClient) Analyze(ctx context.Context, text string, customRules [
 					Score: 0.8,
 				},
 			},
-			SupportedEntity:   "HEALTH_DATA",
+			SupportedEntity: "HEALTH_DATA",
 		},
 		{
 			Name:              "SsnRecognizer",
@@ -100,7 +102,64 @@ func (c *PresidioClient) Analyze(ctx context.Context, text string, customRules [
 					Score: 1.0,
 				},
 			},
-			SupportedEntity:   "US_SSN",
+			SupportedEntity: "US_SSN",
+		},
+		// UK & international phone number recognizer
+		// Covers: +44 7700 900123, +1-800-555-0199, 07700900123, (020) 7946 0123
+		{
+			Name:              "PhoneNumberRecognizer",
+			SupportedLanguage: "en",
+			Patterns: []PresidioPattern{
+				{
+					Name:  "intl_phone",
+					Regex: `(\+?[\d\s\-\(\)]{7,20})`,
+					Score: 0.6,
+				},
+				{
+					Name:  "uk_phone",
+					Regex: `(\+44\s?[\d\s]{10,14}|0\d{4}\s?\d{6}|0\d{3}\s?\d{3}\s?\d{4})`,
+					Score: 0.85,
+				},
+			},
+			SupportedEntity: "PHONE_NUMBER",
+		},
+		// UK National Insurance Number: AB123456C pattern
+		{
+			Name:              "UKNationalIDRecognizer",
+			SupportedLanguage: "en",
+			Patterns: []PresidioPattern{
+				{
+					Name:  "uk_nino",
+					Regex: `\b[A-CEGHJ-PR-TW-Z]{2}[0-9]{6}[A-D]\b`,
+					Score: 0.95,
+				},
+				// Employee ID patterns (EMP-YYYY-NNN)
+				{
+					Name:  "employee_id",
+					Regex: `\bEMP-\d{4}-\d{3,}\b`,
+					Score: 0.9,
+				},
+				// UK Passport-style national IDs
+				{
+					Name:  "uk_passport",
+					Regex: `\b[0-9]{9}\b`,
+					Score: 0.5,
+				},
+			},
+			SupportedEntity: "UK_NATIONAL_ID",
+		},
+		// Generic staff/manager name context recognizer
+		{
+			Name:              "ContextualNameRecognizer",
+			SupportedLanguage: "en",
+			Patterns: []PresidioPattern{
+				{
+					Name:  "manager_field",
+					Regex: `(?i)(?:Manager|Supervisor|Reported to|Managed by|Director|Lead):\s*([A-Z][a-z]+ [A-Z][a-z]+)`,
+					Score: 0.9,
+				},
+			},
+			SupportedEntity: "PERSON",
 		},
 	}
 
@@ -123,7 +182,17 @@ func (c *PresidioClient) Analyze(ctx context.Context, text string, customRules [
 		Text:             text,
 		Language:         "en",
 		AdHocRecognizers: recognizers,
-		Entities:         []string{"PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "US_SSN", "HEALTH_DATA"},
+		Entities: []string{
+			"PERSON",
+			"EMAIL_ADDRESS",
+			"PHONE_NUMBER",
+			"US_SSN",
+			"HEALTH_DATA",
+			"UK_NATIONAL_ID",
+			"NRP",    // Presidio built-in: nationality, religious/political group
+			"UK_NHS", // Presidio built-in: NHS numbers
+			"DATE_TIME",
+		},
 	}
 
 	for _, rule := range customRules {
@@ -160,11 +229,69 @@ func (c *PresidioClient) Analyze(ctx context.Context, text string, customRules [
 	return results, nil
 }
 
+func byteIndexToRuneIndex(text string, byteIndex int) int {
+	if byteIndex <= 0 {
+		return 0
+	}
+	if byteIndex >= len(text) {
+		return len([]rune(text))
+	}
+	return len([]rune(text[:byteIndex]))
+}
+
+func appendRegexAnalyzeResults(results []AnalyzeResult, text, entityType string, pattern *regexp.Regexp) []AnalyzeResult {
+	for _, loc := range pattern.FindAllStringIndex(text, -1) {
+		if len(loc) != 2 {
+			continue
+		}
+		results = append(results, AnalyzeResult{
+			Start:      byteIndexToRuneIndex(text, loc[0]),
+			End:        byteIndexToRuneIndex(text, loc[1]),
+			EntityType: entityType,
+			Score:      1.0,
+		})
+	}
+	return results
+}
+
+func fallbackAnalyze(text string, customRules []RegexRule) []AnalyzeResult {
+	results := []AnalyzeResult{}
+	builtIns := []struct {
+		entityType string
+		pattern    *regexp.Regexp
+	}{
+		{"EMAIL_ADDRESS", regexp.MustCompile(`(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b`)},
+		{"US_SSN", regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`)},
+		{"PHONE_NUMBER", regexp.MustCompile(`(?i)(?:\+?\d[\d\s().-]{7,}\d)`)},
+		{"HEALTH_DATA", regexp.MustCompile(`(?i)\b(patient|diagnosed|treatment|prescription|symptoms|medical|disease|hospital|doctor|clinic)\b`)},
+	}
+
+	for _, item := range builtIns {
+		results = appendRegexAnalyzeResults(results, text, item.entityType, item.pattern)
+	}
+	for _, rule := range customRules {
+		if rule.Pattern == "" || rule.normalizedAction() == "block" {
+			continue
+		}
+		pattern, err := regexp.Compile(rule.Pattern)
+		if err != nil {
+			log.Printf("Skipping invalid fallback regex rule %q: %v", rule.Name, err)
+			continue
+		}
+		entityType := strings.ToUpper(strings.ReplaceAll(rule.Name, " ", "_"))
+		results = appendRegexAnalyzeResults(results, text, entityType, pattern)
+	}
+	return results
+}
+
 // Encryption Helpers (AES-256 CBC Deterministic)
 var encryptionKey []byte
 
 func initEncryptionKey() {
 	keyStr := os.Getenv("ENCRYPTION_KEY")
+	if keyStr == "" {
+		keyStr = os.Getenv("ENVELOPE_KEY")
+	}
 	if keyStr == "" {
 		keyStr = "authclaw-default-32-byte-key-12"
 	}
@@ -211,7 +338,7 @@ func EncryptDeterministic(plaintext string) (string, error) {
 		return "", err
 	}
 	padded := pkcs7Pad([]byte(plaintext), aes.BlockSize)
-	
+
 	h := sha256.New()
 	h.Write([]byte(plaintext))
 	h.Write(encryptionKey)
@@ -428,7 +555,8 @@ func RedactPrompts(ctx context.Context, tenantID string, prompts []string, custo
 	for i, prompt := range prompts {
 		results, err := presidio.Analyze(ctx, prompt, customRules)
 		if err != nil {
-			return nil, nil, err
+			log.Printf("Presidio analysis failed, using regex fallback: %v", err)
+			results = fallbackAnalyze(prompt, customRules)
 		}
 
 		// Sort results descending by start index to prevent offset issues during replacements
@@ -458,7 +586,7 @@ func RedactPrompts(ctx context.Context, tenantID string, prompts []string, custo
 				return nil, nil, err
 			}
 			tokenMap[tokenVal] = originalVal
-			
+
 			// Replace text segment
 			runes = append(runes[:entity.Start], append([]rune(tokenVal), runes[entity.End:]...)...)
 			lastProcessedStart = entity.Start
