@@ -14,10 +14,11 @@ import (
 type contextKey string
 
 const (
-	TenantIDContextKey  contextKey = "tenant_id"
-	ScopesContextKey    contextKey = "scopes"
-	RequestIDContextKey contextKey = "request_id"
-	UserIDContextKey    contextKey = "user_id"
+	TenantIDContextKey   contextKey = "tenant_id"
+	ScopesContextKey     contextKey = "scopes"
+	RequestIDContextKey  contextKey = "request_id"
+	UserIDContextKey     contextKey = "user_id"
+	APIKeyHashContextKey contextKey = "api_key_hash"
 )
 
 // generateRequestID creates a random 16-byte hex request identifier.
@@ -82,6 +83,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, ScopesContextKey, scopes)
 		ctx = context.WithValue(ctx, RequestIDContextKey, requestID)
 		ctx = context.WithValue(ctx, UserIDContextKey, userID)
+		ctx = context.WithValue(ctx, APIKeyHashContextKey, keyHash)
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

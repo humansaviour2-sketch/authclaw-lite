@@ -38,6 +38,7 @@ func main() {
 	proxy := NewProxyServer()
 	r.Route("/v1", func(r chi.Router) {
 		r.Use(AuthMiddleware)
+		r.Use(RateLimitMiddleware)
 		r.HandleFunc("/*", proxy.ServeHTTP)
 	})
 

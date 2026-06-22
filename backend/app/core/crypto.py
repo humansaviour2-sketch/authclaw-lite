@@ -10,7 +10,11 @@ def get_encryption_key() -> bytes:
     """Gets the encryption key and pads/truncates it to 32 bytes (matching Go gateway)"""
     key_str = os.getenv("ENCRYPTION_KEY")
     if not key_str:
-        key_str = os.getenv("ENVELOPE_KEY", "authclaw-default-32-byte-key-12")
+        key_str = os.getenv("ENVELOPE_KEY")
+    if not key_str:
+        if os.getenv("AUTHCLAW_ENV", "").lower() == "production":
+            raise RuntimeError("ENVELOPE_KEY is required in production")
+        key_str = "authclaw-default-32-byte-key-12"
 
     key_bytes = key_str.encode("utf-8")
     if len(key_bytes) > 32:

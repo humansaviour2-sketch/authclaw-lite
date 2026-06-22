@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { query, queryWithTenantContext } from "@/lib/db";
 import { sessionStore } from "@/lib/session-store";
+import { sessionCookieOptions } from "@/lib/cookie-options";
 
 export async function POST(request: Request) {
   try {
@@ -58,11 +59,7 @@ export async function POST(request: Request) {
 
     // Set secure HTTP-only session cookie
     response.cookies.set("authclaw_session", JSON.stringify(cookiePayload), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24, // 24 hours
-      path: "/",
+      ...sessionCookieOptions(60 * 60 * 24),
     });
 
     return response;

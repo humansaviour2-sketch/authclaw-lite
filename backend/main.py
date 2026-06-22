@@ -12,6 +12,9 @@ else:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
+from app.core.startup_checks import validate_production_environment
+
+validate_production_environment()
 
 # Initialize FastAPI app
 app = FastAPI(

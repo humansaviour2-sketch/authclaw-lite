@@ -117,6 +117,17 @@ interface GatewayTestResult {
   error?: string;
 }
 
+interface OnboardingConnectResult {
+  tenant_name: string;
+  email: string;
+  api_key: string;
+  gateway_url: string;
+  provider: string;
+  model: string;
+  powershell_snippet: string;
+  curl_snippet: string;
+}
+
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
@@ -141,7 +152,8 @@ export default function ConnectPage() {
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState<GatewayTestResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
-  const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8080";
+  const [onboardingResult, setOnboardingResult] = useState<OnboardingConnectResult | null>(null);
+  const gatewayUrl = onboardingResult?.gateway_url || process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:18080";
   const selected = providerExamples[provider];
 
   const curlCommand = useMemo(() => {
@@ -157,6 +169,11 @@ export default function ConnectPage() {
     await navigator.clipboard.writeText(value);
     setCopied(id);
     setTimeout(() => setCopied(null), 1500);
+  };
+
+  const dismissOnboardingResult = () => {
+    window.sessionStorage.removeItem("authclaw_onboarding_result");
+    setOnboardingResult(null);
   };
 
   const fetchApprovals = async () => {
@@ -219,6 +236,21 @@ export default function ConnectPage() {
       window.clearTimeout(initialFetch);
       window.clearInterval(interval);
     };
+  }, []);
+
+  useEffect(() => {
+    const saved = window.sessionStorage.getItem("authclaw_onboarding_result");
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved) as OnboardingConnectResult;
+      setOnboardingResult(parsed);
+      if (parsed.provider && parsed.provider in providerExamples) {
+        setProvider(parsed.provider as Provider);
+        setCredentialProvider(parsed.provider as Provider);
+      }
+    } catch {
+      window.sessionStorage.removeItem("authclaw_onboarding_result");
+    }
   }, []);
 
   const decideApproval = async (id: string, decision: "approve" | "reject") => {
@@ -318,6 +350,97 @@ export default function ConnectPage() {
           the governance evidence.
         </p>
       </div>
+
+      {onboardingResult && (
+        <section className="rounded-lg border border-emerald-500/25 bg-[#09110f] overflow-hidden">
+          <div className="border-b border-emerald-500/20 px-5 py-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="flex items-center gap-2 text-sm font-bold text-emerald-100">
+                  <ShieldCheck className="h-4 w-4 text-emerald-400" />
+                  Tenant Ready
+                </div>
+                <p className="mt-1 text-xs text-emerald-200/70">
+                  {onboardingResult.tenant_name} is signed in. Copy the first gateway key now, then save a provider key below.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={dismissOnboardingResult}
+                className="rounded-lg border border-emerald-500/20 px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/10"
+              >
+                Hide
+              </button>
+            </div>
+          </div>
+
+          <div className="grid gap-4 p-5 lg:grid-cols-2">
+            <div className="space-y-4">
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-200/70">
+                    First AuthClaw Gateway Key
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => copy("onboarding-key", onboardingResult.api_key)}
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-200 hover:text-white"
+                  >
+                    {copied === "onboarding-key" ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
+                    {copied === "onboarding-key" ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <pre className="overflow-x-auto rounded-lg border border-emerald-500/20 bg-black/25 p-3 text-xs text-emerald-50">
+                  {onboardingResult.api_key}
+                </pre>
+                <p className="mt-2 text-[10px] text-emerald-200/60">This raw key is shown from onboarding only. Store it before hiding this panel.</p>
+              </div>
+
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-200/70">Gateway URL</span>
+                  <button
+                    type="button"
+                    onClick={() => copy("onboarding-gateway", onboardingResult.gateway_url)}
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-200 hover:text-white"
+                  >
+                    {copied === "onboarding-gateway" ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
+                    {copied === "onboarding-gateway" ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <pre className="overflow-x-auto rounded-lg border border-emerald-500/20 bg-black/25 p-3 text-xs text-emerald-50">
+                  {onboardingResult.gateway_url}
+                </pre>
+              </div>
+            </div>
+
+            <div>
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-200/70">PowerShell Starter Request</span>
+                <button
+                  type="button"
+                  onClick={() => copy("onboarding-powershell", onboardingResult.powershell_snippet)}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-200 hover:text-white"
+                >
+                  {copied === "onboarding-powershell" ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}
+                  {copied === "onboarding-powershell" ? "Copied" : "Copy"}
+                </button>
+              </div>
+              <pre className="max-h-80 overflow-auto rounded-lg border border-emerald-500/20 bg-black/25 p-3 text-xs text-emerald-50">
+                {onboardingResult.powershell_snippet}
+              </pre>
+              <button
+                type="button"
+                onClick={() => copy("onboarding-curl", onboardingResult.curl_snippet)}
+                className="mt-3 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500"
+              >
+                {copied === "onboarding-curl" ? <Check className="h-4 w-4" /> : <Clipboard className="h-4 w-4" />}
+                {copied === "onboarding-curl" ? "Copied curl" : "Copy curl instead"}
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <section className="rounded-lg bg-[#09090d] border border-slate-800 p-5">
@@ -510,7 +633,8 @@ export default function ConnectPage() {
 
           {!activeCredentialForProvider && (
             <p className="mt-3 text-xs text-amber-200">
-              Save an active {provider} provider key first, then run the gateway test.
+              Save an active {providerExamples[provider].label} provider key first, then run the gateway test.
+              {provider === "openai" ? " You can leave OpenAI untested until you have an OpenAI API key." : ""}
             </p>
           )}
           {testError && (
@@ -579,9 +703,11 @@ export default function ConnectPage() {
           <div>
             <div className="flex items-center gap-2 text-white font-bold text-sm">
               <Code2 className="w-4 h-4 text-indigo-400" />
-              Copyable Demo Request
+              Copyable curl Request
             </div>
-            <p className="text-xs text-slate-500 mt-1">Send this after creating a tenant API key and provider route.</p>
+            <p className="text-xs text-slate-500 mt-1">
+              macOS/Linux curl format. On Windows, use the PowerShell starter request from the Tenant Ready panel.
+            </p>
           </div>
           <button
             onClick={() => copy("curl", curlCommand)}

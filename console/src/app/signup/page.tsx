@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -20,6 +20,7 @@ interface SignupResponse {
   tenant_name: string;
   expires_at: string;
   delivery: string;
+  next_resend_at: string;
   dev_otp?: string;
 }
 
@@ -45,6 +46,8 @@ export default function SignupPage() {
   const [signup, setSignup] = useState<SignupResponse | null>(null);
   const [verified, setVerified] = useState<VerifyResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -53,6 +56,16 @@ export default function SignupPage() {
     if (signup) return 2;
     return 1;
   }, [signup, verified]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const resendSecondsRemaining = useMemo(() => {
+    if (!signup?.next_resend_at) return 0;
+    return Math.max(0, Math.ceil((new Date(signup.next_resend_at).getTime() - now) / 1000));
+  }, [now, signup?.next_resend_at]);
 
   const requestOtp = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -71,6 +84,8 @@ export default function SignupPage() {
       setSignup(data);
       if (data.dev_otp) {
         setOtp(data.dev_otp);
+      } else {
+        setOtp("");
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not start signup");
@@ -95,10 +110,39 @@ export default function SignupPage() {
         throw new Error(data.detail || data.message || "Could not verify code");
       }
       setVerified(data);
+      window.sessionStorage.setItem("authclaw_onboarding_result", JSON.stringify(data));
+      router.push("/connect?onboarding=1");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not verify code");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const resendOtp = async () => {
+    if (!signup) return;
+    setResending(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/onboarding/resend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ signup_id: signup.signup_id }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || "Could not resend code");
+      }
+      setSignup((current) => current ? { ...current, ...data } : current);
+      if (data.dev_otp) {
+        setOtp(data.dev_otp);
+      } else {
+        setOtp("");
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not resend code");
+    } finally {
+      setResending(false);
     }
   };
 
@@ -217,12 +261,18 @@ export default function SignupPage() {
               <form onSubmit={verifyOtp} className="space-y-5">
                 <div>
                   <h2 className="text-lg font-bold text-white">Verify Email</h2>
-                  <p className="mt-1 text-sm text-slate-500">Enter the 6-digit code sent for {signup.email}.</p>
+                  <p className="mt-1 text-sm text-slate-500">Enter the 6-digit code sent to {signup.email}.</p>
                 </div>
 
                 {signup.dev_otp && (
                   <div className="rounded-lg border border-amber-400/25 bg-amber-400/10 p-3 text-sm text-amber-100">
                     Demo OTP: <span className="font-mono font-bold">{signup.dev_otp}</span>
+                  </div>
+                )}
+
+                {!signup.dev_otp && (
+                  <div className="rounded-lg border border-slate-800 bg-[#07070a] p-3 text-xs text-slate-400">
+                    Code sent by {signup.delivery === "smtp" ? "email" : signup.delivery}. Check your inbox and spam folder.
                   </div>
                 )}
 
@@ -248,6 +298,24 @@ export default function SignupPage() {
                   {loading ? "Creating tenant..." : "Verify and Create Tenant"}
                   <ShieldCheck className="h-4 w-4" />
                 </button>
+
+                <div className="flex flex-col gap-2 border-t border-slate-800 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-slate-500">
+                    Code expires {new Date(signup.expires_at).toLocaleTimeString()}.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void resendOtp()}
+                    disabled={loading || resending || resendSecondsRemaining > 0}
+                    className="inline-flex items-center justify-center rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:opacity-60"
+                  >
+                    {resending
+                      ? "Resending..."
+                      : resendSecondsRemaining > 0
+                        ? `Resend in ${resendSecondsRemaining}s`
+                        : "Resend Code"}
+                  </button>
+                </div>
               </form>
             )}
 

@@ -27,6 +27,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             "/openapi.json",
             "/redoc",
             "/v1/onboarding/signup",
+            "/v1/onboarding/resend",
             "/v1/onboarding/verify",
         }
         if path in public_paths or path.startswith("/static"):

@@ -6,6 +6,11 @@ This is the demo deployment path for the request:
 
 The full production migration remains in `MIGRATION_PLAN_GOVERNANCE_LAYER.md`. This document is intentionally smaller. It is meant for a `$120` credit demo/pilot, not enterprise production.
 
+For the current private AWS deployment checklist, use:
+
+- `.env.production.example`
+- `AUTHCLAW_LITE_AWS_DEPLOYMENT_CHECKLIST.md`
+
 ## What This Demo Proves
 
 - AuthClaw has a hosted console URL.

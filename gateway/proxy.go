@@ -121,6 +121,15 @@ func generateID() string {
 	return hex.EncodeToString(b)
 }
 
+func requiresTenantProviderCredential(provider string) bool {
+	switch provider {
+	case "openai", "anthropic", "cohere", "gemini":
+		return true
+	default:
+		return false
+	}
+}
+
 func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Extract tenant ID and request ID from context (injected by AuthMiddleware)
 	tenantID, _ := r.Context().Value(TenantIDContextKey).(string)
@@ -150,6 +159,17 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if credentialErr != nil {
 		log.Printf("Provider credential load failed: %v", credentialErr)
 		http.Error(w, "Provider credential could not be loaded", http.StatusBadGateway)
+		return
+	}
+	if tenantID != "" && requiresTenantProviderCredential(provider) && (providerCredential == nil || providerCredential.APIKey == "") {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(`{"error":"ProviderCredentialMissing","message":"Save an active provider API key before sending gateway traffic."}`))
+		EmitAuditEvent(&AuditEvent{
+			ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
+			TenantID: tenantID, Action: "block", DecisionReason: "Provider credential missing",
+			Provider: provider, ResponseStatus: http.StatusBadGateway, DurationMs: 0,
+		})
 		return
 	}
 	if providerCredential != nil && providerCredential.Endpoint != "" {
@@ -289,6 +309,23 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if redactErr == nil {
 				log.Printf("[DEBUG] ORIGINAL PROMPT: %v", normalized.Prompts)
 				log.Printf("[DEBUG] REDACTED PROMPT: %v", redactedPrompts)
+				if len(tokenMap) > 0 {
+					EmitAuditEvent(&AuditEvent{
+						ID:             generateID(),
+						RequestID:      requestID,
+						Timestamp:      time.Now(),
+						TenantID:       tenantID,
+						PolicyID:       policyID,
+						Action:         "redact",
+						DecisionReason: "Prompt redaction applied",
+						Provider:       provider,
+						Model:          model,
+						PromptCount:    promptCount,
+						RequestSize:    int(r.ContentLength),
+						ResponseStatus: 0,
+						DurationMs:     0,
+					})
+				}
 				newBody, rebuildErr := rebuilder(redactedPrompts)
 				if rebuildErr == nil {
 					r.Body = io.NopCloser(bytes.NewBuffer(newBody))
@@ -386,7 +423,7 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if providerCredential != nil {
 				geminiKey = providerCredential.APIKey
 			}
-			if geminiKey == "" {
+			if geminiKey == "" && tenantID == "" {
 				geminiKey = os.Getenv("GEMINI_API_KEY")
 			}
 			if geminiKey != "" {
@@ -462,13 +499,17 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	duration := time.Since(startTime).Milliseconds()
 
 	// Emit Allow Audit Event
+	auditAction := "allow"
+	if strings.HasPrefix(requestID, "connect-test-") {
+		auditAction = "test_request"
+	}
 	event := &AuditEvent{
 		ID:             generateID(),
 		RequestID:      requestID,
 		Timestamp:      startTime,
 		TenantID:       tenantID,
 		PolicyID:       policyID,
-		Action:         "allow",
+		Action:         auditAction,
 		DecisionReason: "Allowed",
 		Provider:       provider,
 		Model:          model,

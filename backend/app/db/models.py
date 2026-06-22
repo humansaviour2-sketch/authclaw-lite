@@ -185,6 +185,10 @@ class OnboardingEmailOTP(Base):
     status = Column(String(50), nullable=False, default="pending")
     attempts = Column(Integer, nullable=False, default=0)
     expires_at = Column(DateTime(timezone=True), nullable=False)
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    resend_count = Column(Integer, nullable=False, default=0)
+    last_delivery = Column(String(50), nullable=True)
+    delivery_error = Column(Text, nullable=True)
     verified_at = Column(DateTime(timezone=True), nullable=True)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True)
     api_key_id = Column(UUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=True)
@@ -302,7 +306,18 @@ class AuditLogMetadata(Base):
     record_id = Column(UUID(as_uuid=True), nullable=False, unique=True)  # Matches ClickHouse record_id
     actor_id = Column(UUID(as_uuid=True), nullable=True)
     action = Column(String(255), nullable=False)
+    request_id = Column(String(255), nullable=True)
+    policy_id = Column(UUID(as_uuid=True), nullable=True)
+    provider = Column(String(100), nullable=True)
+    model = Column(String(255), nullable=True)
+    reason = Column(Text, nullable=True)
+    prompt_count = Column(Integer, nullable=False, default=0)
+    request_size = Column(Integer, nullable=False, default=0)
+    response_status = Column(Integer, nullable=False, default=0)
+    duration_ms = Column(Integer, nullable=False, default=0)
     frameworks_affected = Column(ARRAY(String), nullable=True)  # GDPR, HIPAA, SOC2
+    prior_hash = Column(String(64), nullable=True)
+    integrity_hash = Column(String(64), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
     __table_args__ = (

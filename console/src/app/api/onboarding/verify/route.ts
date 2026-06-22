@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sessionStore } from "@/lib/session-store";
+import { sessionCookieOptions } from "@/lib/cookie-options";
 
 const BACKEND_URL = process.env.API_URL || "http://localhost:8000";
 
@@ -35,11 +36,7 @@ export async function POST(request: Request) {
 
     const nextResponse = NextResponse.json(data);
     nextResponse.cookies.set("authclaw_session", JSON.stringify(cookiePayload), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 24,
-      path: "/",
+      ...sessionCookieOptions(60 * 60 * 24),
     });
     return nextResponse;
   } catch (error: unknown) {

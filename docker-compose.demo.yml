@@ -76,10 +76,23 @@ services:
       AWS_ENABLED: ${AWS_ENABLED:-false}
       BEDROCK_ENABLED: ${BEDROCK_ENABLED:-false}
       AWS_SECRETS_MANAGER_ENABLED: ${AWS_SECRETS_MANAGER_ENABLED:-false}
+      AUTHCLAW_ENV: ${AUTHCLAW_ENV:-demo}
       JWT_SECRET: ${JWT_SECRET:-demo-change-me}
       SESSION_SECRET: ${SESSION_SECRET:-demo-change-me}
       ENVELOPE_KEY: ${ENVELOPE_KEY:-demo-local-envelope-key-change-me}
       KMS_KEY_ID: ${KMS_KEY_ID:-demo-local-key}
+      DEMO_OTP_VISIBLE: ${DEMO_OTP_VISIBLE:-true}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      SMTP_TLS: ${SMTP_TLS:-true}
+      PUBLIC_GATEWAY_URL: ${PUBLIC_GATEWAY_URL:-http://localhost:18080}
+      ONBOARDING_SIGNUP_EMAIL_PER_HOUR: ${ONBOARDING_SIGNUP_EMAIL_PER_HOUR:-3}
+      ONBOARDING_SIGNUP_IP_PER_DAY: ${ONBOARDING_SIGNUP_IP_PER_DAY:-10}
+      ONBOARDING_VERIFY_IP_PER_HOUR: ${ONBOARDING_VERIFY_IP_PER_HOUR:-30}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     command: ["sh", "-c", "DATABASE_URL=\"$$OWNER_DATABASE_URL\" alembic upgrade head && DATABASE_URL=\"$$OWNER_DATABASE_URL\" python scripts/ensure_app_db_role.py && DATABASE_URL=\"$$APP_DATABASE_URL\" python -m uvicorn main:app --host 0.0.0.0 --port 8000"]
@@ -118,6 +131,12 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       AWS_ENABLED: ${AWS_ENABLED:-false}
       BEDROCK_ENABLED: ${BEDROCK_ENABLED:-false}
+      AUTHCLAW_ENV: ${AUTHCLAW_ENV:-demo}
+      GATEWAY_RATE_LIMIT_ENABLED: ${GATEWAY_RATE_LIMIT_ENABLED:-true}
+      GATEWAY_RATE_LIMIT_PER_MINUTE: ${GATEWAY_RATE_LIMIT_PER_MINUTE:-30}
+      GATEWAY_RATE_LIMIT_BURST_10S: ${GATEWAY_RATE_LIMIT_BURST_10S:-10}
+      GATEWAY_RATE_LIMIT_DAILY: ${GATEWAY_RATE_LIMIT_DAILY:-1000}
+      GATEWAY_MAX_BODY_BYTES: ${GATEWAY_MAX_BODY_BYTES:-131072}
     ports:
       - "${GATEWAY_PORT:-8080}:8080"
 
@@ -125,6 +144,10 @@ services:
     build:
       context: ./console
       dockerfile: Dockerfile.demo
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:18000}
+        NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:18080}
+        NEXT_PUBLIC_AUTHCLAW_DEMO_MODE: ${NEXT_PUBLIC_AUTHCLAW_DEMO_MODE:-true}
     container_name: authclaw-demo-console
     depends_on:
       backend:
@@ -135,9 +158,10 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_APP_USER:-authclaw_app}:${POSTGRES_APP_PASSWORD:-authclaw_app}@postgres:5432/${POSTGRES_DB:-authclaw}
       API_URL: http://backend:8000
       GATEWAY_INTERNAL_URL: http://gateway:8080
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-      NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:8080}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:18000}
+      NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:18080}
       NEXT_PUBLIC_AUTHCLAW_DEMO_MODE: ${NEXT_PUBLIC_AUTHCLAW_DEMO_MODE:-true}
+      AUTHCLAW_COOKIE_SECURE: ${AUTHCLAW_COOKIE_SECURE:-false}
       NODE_ENV: production
     ports:
       - "${CONSOLE_PORT:-3001}:3001"

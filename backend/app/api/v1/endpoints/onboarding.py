@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import secrets
-import smtplib
 import uuid
 from datetime import datetime, timedelta, timezone
-from email.message import EmailMessage
 
+import redis
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
@@ -25,17 +25,30 @@ from app.db.models import (
 )
 from app.schemas.models import (
     OnboardingChecklistResponse,
+    OnboardingResendRequest,
+    OnboardingResendResponse,
     OnboardingSignupRequest,
     OnboardingSignupResponse,
     OnboardingVerifyRequest,
     OnboardingVerifyResponse,
 )
+from app.services.email_service import EmailDeliveryError, demo_otp_visible, send_otp_email
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 DEFAULT_PROVIDER = "gemini"
 DEFAULT_MODEL = "gemini-2.5-flash-lite"
 DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com"
+OTP_TTL_MINUTES = 15
+OTP_RESEND_COOLDOWN_SECONDS = 60
+OTP_MAX_RESENDS = 3
+OTP_MAX_ATTEMPTS = 5
+ONBOARDING_SIGNUP_EMAIL_PER_HOUR = int(os.getenv("ONBOARDING_SIGNUP_EMAIL_PER_HOUR", "3"))
+ONBOARDING_SIGNUP_IP_PER_DAY = int(os.getenv("ONBOARDING_SIGNUP_IP_PER_DAY", "10"))
+ONBOARDING_VERIFY_IP_PER_HOUR = int(os.getenv("ONBOARDING_VERIFY_IP_PER_HOUR", "30"))
+
+_redis_client: redis.Redis | None = None
 
 STARTER_POLICY = r'''regex_rules:
   - name: customer_email
@@ -89,13 +102,57 @@ OwnerSessionLocal = _owner_sessionmaker()
 
 
 def _otp_hash(email: str, otp: str) -> str:
-    secret = os.getenv("SESSION_SECRET") or os.getenv("JWT_SECRET") or "authclaw-lite-dev-secret"
+    secret = os.getenv("SESSION_SECRET") or os.getenv("JWT_SECRET")
+    if not secret:
+        if os.getenv("AUTHCLAW_ENV", "").lower() == "production":
+            raise RuntimeError("SESSION_SECRET or JWT_SECRET is required in production")
+        secret = "authclaw-lite-dev-secret"
     material = f"{email.strip().lower()}:{otp}:{secret}".encode("utf-8")
     return hashlib.sha256(material).hexdigest()
 
 
 def _api_key_hash(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+
+def _rate_limit_hash(value: str) -> str:
+    return hashlib.sha256(value.strip().lower().encode("utf-8")).hexdigest()[:24]
+
+
+def _client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()
+    if request.client:
+        return request.client.host
+    return "unknown"
+
+
+def _get_redis() -> redis.Redis:
+    global _redis_client
+    if _redis_client is None:
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        if redis_url and not redis_url.startswith(("redis://", "rediss://")):
+            redis_url = f"redis://{redis_url}"
+        _redis_client = redis.from_url(redis_url, decode_responses=True)
+    return _redis_client
+
+
+def _enforce_onboarding_rate_limit(key: str, limit: int, window_seconds: int, message: str) -> None:
+    if limit <= 0:
+        return
+    try:
+        client = _get_redis()
+        count = client.incr(key)
+        if count == 1:
+            client.expire(key, window_seconds)
+    except redis.RedisError as exc:
+        logger.warning("Onboarding rate limiter unavailable: %s", exc)
+        if os.getenv("AUTHCLAW_ENV", "").lower() == "production":
+            raise HTTPException(status_code=503, detail="Rate limiter unavailable. Request blocked for safety.") from exc
+        return
+    if count > limit:
+        raise HTTPException(status_code=429, detail=message)
 
 
 def _generate_otp() -> str:
@@ -106,33 +163,17 @@ def _generate_gateway_key() -> str:
     return "acl_live_" + secrets.token_urlsafe(24)
 
 
-def _send_otp_email(email: str, otp: str, tenant_name: str) -> str:
-    smtp_host = os.getenv("SMTP_HOST", "")
-    if not smtp_host:
-        print(f"[ONBOARDING] Email OTP for {email} ({tenant_name}): {otp}")
-        return "console"
+def _next_resend_at(sent_at: datetime | None) -> datetime:
+    base = sent_at or datetime.now(timezone.utc)
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=timezone.utc)
+    return base + timedelta(seconds=OTP_RESEND_COOLDOWN_SECONDS)
 
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER", "")
-    smtp_password = os.getenv("SMTP_PASSWORD", "")
-    smtp_from = os.getenv("SMTP_FROM", "no-reply@authclaw.local")
 
-    message = EmailMessage()
-    message["Subject"] = "Your AuthClaw verification code"
-    message["From"] = smtp_from
-    message["To"] = email
-    message.set_content(
-        f"Your AuthClaw verification code is {otp}.\n\n"
-        f"It expires in 15 minutes for tenant setup: {tenant_name}."
-    )
-
-    with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
-        if os.getenv("SMTP_TLS", "true").lower() == "true":
-            server.starttls()
-        if smtp_user:
-            server.login(smtp_user, smtp_password)
-        server.send_message(message)
-    return "smtp"
+def _deliver_otp(email: str, otp: str, tenant_name: str) -> tuple[str, str | None]:
+    result = send_otp_email(email, otp, tenant_name)
+    dev_otp = otp if result.method == "console" and demo_otp_visible() else None
+    return result.method, dev_otp
 
 
 def _checklist(status_row: OnboardingStatus) -> OnboardingChecklistResponse:
@@ -181,11 +222,26 @@ Invoke-WebRequest `
 
 
 @router.post("/signup", response_model=OnboardingSignupResponse, status_code=status.HTTP_202_ACCEPTED)
-def signup(payload: OnboardingSignupRequest):
+def signup(payload: OnboardingSignupRequest, request: Request):
     email = payload.email.strip().lower()
     tenant_name = payload.tenant_name.strip()
+    now = datetime.now(timezone.utc)
+    email_hash = _rate_limit_hash(email)
+    ip_hash = _rate_limit_hash(_client_ip(request))
+    _enforce_onboarding_rate_limit(
+        f"onboarding:signup:email:{email_hash}:{now.strftime('%Y%m%d%H')}",
+        ONBOARDING_SIGNUP_EMAIL_PER_HOUR,
+        3700,
+        "Too many signup codes requested for this email. Try again later.",
+    )
+    _enforce_onboarding_rate_limit(
+        f"onboarding:signup:ip:{ip_hash}:{now.strftime('%Y%m%d')}",
+        ONBOARDING_SIGNUP_IP_PER_DAY,
+        90000,
+        "Too many signup attempts from this network today.",
+    )
     otp = _generate_otp()
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+    expires_at = now + timedelta(minutes=OTP_TTL_MINUTES)
 
     db = OwnerSessionLocal()
     try:
@@ -202,21 +258,91 @@ def signup(payload: OnboardingSignupRequest):
             tenant_name=tenant_name,
             otp_hash=_otp_hash(email, otp),
             expires_at=expires_at,
+            sent_at=now,
         )
         db.add(signup_row)
+
+        delivery, dev_otp = _deliver_otp(email, otp, tenant_name)
+        signup_row.last_delivery = delivery
+        signup_row.delivery_error = None
         db.commit()
         db.refresh(signup_row)
-
-        delivery = _send_otp_email(email, otp, tenant_name)
-        dev_otp = otp if delivery == "console" and os.getenv("NEXT_PUBLIC_AUTHCLAW_DEMO_MODE", "true").lower() != "false" else None
         return OnboardingSignupResponse(
             signup_id=signup_row.id,
             email=email,
             tenant_name=tenant_name,
             expires_at=expires_at,
             delivery=delivery,
+            next_resend_at=_next_resend_at(signup_row.sent_at),
             dev_otp=dev_otp,
         )
+    except EmailDeliveryError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except HTTPException:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@router.post("/resend", response_model=OnboardingResendResponse)
+def resend(payload: OnboardingResendRequest, request: Request):
+    now = datetime.now(timezone.utc)
+    otp = _generate_otp()
+    expires_at = now + timedelta(minutes=OTP_TTL_MINUTES)
+
+    db = OwnerSessionLocal()
+    try:
+        signup_row = db.query(OnboardingEmailOTP).filter(OnboardingEmailOTP.id == payload.signup_id).first()
+        if not signup_row:
+            raise HTTPException(status_code=404, detail="Signup request not found")
+        if signup_row.status != "pending":
+            raise HTTPException(status_code=400, detail="Signup request is not pending")
+
+        email_hash = _rate_limit_hash(signup_row.email)
+        ip_hash = _rate_limit_hash(_client_ip(request))
+        _enforce_onboarding_rate_limit(
+            f"onboarding:resend:email:{email_hash}:{now.strftime('%Y%m%d%H')}",
+            ONBOARDING_SIGNUP_EMAIL_PER_HOUR,
+            3700,
+            "Too many verification code resends for this email. Try again later.",
+        )
+        _enforce_onboarding_rate_limit(
+            f"onboarding:resend:ip:{ip_hash}:{now.strftime('%Y%m%d')}",
+            ONBOARDING_SIGNUP_IP_PER_DAY,
+            90000,
+            "Too many verification code resends from this network today.",
+        )
+
+        next_resend_at = _next_resend_at(signup_row.sent_at)
+        if next_resend_at > now:
+            raise HTTPException(status_code=429, detail=f"Please wait until {next_resend_at.isoformat()} before resending")
+        if signup_row.resend_count >= OTP_MAX_RESENDS:
+            raise HTTPException(status_code=429, detail="Too many verification code resends")
+
+        signup_row.otp_hash = _otp_hash(signup_row.email, otp)
+        signup_row.expires_at = expires_at
+        signup_row.sent_at = now
+        signup_row.resend_count += 1
+        signup_row.attempts = 0
+
+        delivery, dev_otp = _deliver_otp(signup_row.email, otp, signup_row.tenant_name)
+        signup_row.last_delivery = delivery
+        signup_row.delivery_error = None
+        db.commit()
+        db.refresh(signup_row)
+        return OnboardingResendResponse(
+            signup_id=signup_row.id,
+            email=signup_row.email,
+            expires_at=signup_row.expires_at,
+            delivery=delivery,
+            next_resend_at=_next_resend_at(signup_row.sent_at),
+            dev_otp=dev_otp,
+        )
+    except EmailDeliveryError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except HTTPException:
         db.rollback()
         raise
@@ -225,9 +351,16 @@ def signup(payload: OnboardingSignupRequest):
 
 
 @router.post("/verify", response_model=OnboardingVerifyResponse)
-def verify(payload: OnboardingVerifyRequest):
+def verify(payload: OnboardingVerifyRequest, request: Request):
     now = datetime.now(timezone.utc)
     gateway_url = os.getenv("PUBLIC_GATEWAY_URL") or os.getenv("NEXT_PUBLIC_GATEWAY_URL") or "http://localhost:18080"
+    ip_hash = _rate_limit_hash(_client_ip(request))
+    _enforce_onboarding_rate_limit(
+        f"onboarding:verify:ip:{ip_hash}:{now.strftime('%Y%m%d%H')}",
+        ONBOARDING_VERIFY_IP_PER_HOUR,
+        3700,
+        "Too many verification attempts from this network. Try again later.",
+    )
 
     db = OwnerSessionLocal()
     try:
@@ -245,7 +378,7 @@ def verify(payload: OnboardingVerifyRequest):
             signup_row.status = "expired"
             db.commit()
             raise HTTPException(status_code=400, detail="Verification code expired")
-        if signup_row.attempts >= 5:
+        if signup_row.attempts >= OTP_MAX_ATTEMPTS:
             raise HTTPException(status_code=429, detail="Too many verification attempts")
 
         signup_row.attempts += 1

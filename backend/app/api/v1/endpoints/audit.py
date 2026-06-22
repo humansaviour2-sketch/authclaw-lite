@@ -151,18 +151,19 @@ def _verify_chain(records: List[dict]) -> List[dict]:
     """Annotate each record with chain_valid=True/False (verifying chronologically)."""
     # Reverse records to go oldest -> newest for rolling verification
     asc_records = list(reversed(records))
-    prior_by_tenant: Dict[str, str] = {}
+    last_hash_by_tenant: Dict[str, str] = {}
 
     for record in asc_records:
         tenant_id = record.get("tenant_id", "")
-        if tenant_id not in prior_by_tenant:
-            prior_by_tenant[tenant_id] = record.get("prior_hash", _GENESIS_HASH)
-        prior_hash = prior_by_tenant[tenant_id]
+        prior_hash = record.get("prior_hash") or _GENESIS_HASH
         data = _canonical_json(record) + prior_hash
         expected = hashlib.sha256(data.encode("utf-8")).hexdigest()
         actual = record.get("integrity_hash", "")
-        record["chain_valid"] = expected == actual
-        prior_by_tenant[tenant_id] = actual or expected
+        previous_hash = last_hash_by_tenant.get(tenant_id)
+        link_valid = previous_hash is None or prior_hash == previous_hash
+        record["chain_valid"] = bool(actual) and expected == actual and link_valid
+        if actual:
+            last_hash_by_tenant[tenant_id] = actual
 
     # Reverse back to keep original order (newest first)
     return list(reversed(asc_records))
@@ -213,7 +214,7 @@ def get_audit_logs(
             )
 
     # ── PostgreSQL fallback ────────────────────────────────────────────────────
-    return _query_postgres(db, tenant_id, limit, offset, action)
+    return _query_postgres(db, tenant_id, limit, offset, action, integrity_check)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -303,6 +304,7 @@ def _query_postgres(
     limit: int,
     offset: int,
     action: Optional[str],
+    integrity_check: bool,
 ) -> AuditLogsResponse:
     """Fallback: query PostgreSQL audit_log_metadata for Phase 6 compatibility."""
     try:
@@ -313,7 +315,7 @@ def _query_postgres(
             q = q.filter(AuditLogMetadata.action == action)
         
         total_count = q.count()
-        logs = q.offset(offset).limit(limit).all()
+        logs = q.order_by(AuditLogMetadata.created_at.desc(), AuditLogMetadata.record_id.desc()).offset(offset).limit(limit).all()
 
         records = [
             {
@@ -324,27 +326,29 @@ def _query_postgres(
                 "actor_id": str(log.actor_id) if log.actor_id else "",
                 "actor_type": "gateway",
                 "action": log.action,
-                "policy_id": "",
-                "provider": "",
-                "model": "",
-                "reason": "",
-                "prompt_count": 0,
-                "request_size": 0,
-                "response_status": 0,
-                "duration_ms": 0,
+                "policy_id": str(log.policy_id) if log.policy_id else "",
+                "provider": log.provider or "",
+                "model": log.model or "",
+                "reason": log.reason or "",
+                "prompt_count": log.prompt_count or 0,
+                "request_size": log.request_size or 0,
+                "response_status": log.response_status or 0,
+                "duration_ms": log.duration_ms or 0,
                 "frameworks_affected": log.frameworks_affected,
                 "created_at": log.created_at.isoformat() if log.created_at else None,
-                "request_id": "",
-                "prior_hash": "",
-                "integrity_hash": "",
+                "request_id": log.request_id or "",
+                "prior_hash": log.prior_hash or "",
+                "integrity_hash": log.integrity_hash or "",
             }
             for log in logs
         ]
+        if integrity_check:
+            records = _verify_chain(records)
         return AuditLogsResponse(
             source="postgres",
             total=total_count,
             records=records,
-            integrity_checked=False,
+            integrity_checked=integrity_check,
         )
     except Exception as exc:
         logger.error("PostgreSQL audit query failed: %s", exc)

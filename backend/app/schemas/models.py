@@ -157,6 +157,22 @@ class OnboardingSignupResponse(BaseModel):
     tenant_name: str
     expires_at: datetime
     delivery: str
+    next_resend_at: datetime
+    dev_otp: Optional[str] = None
+
+
+class OnboardingResendRequest(BaseModel):
+    """Resend an existing pending signup OTP."""
+    signup_id: UUID
+
+
+class OnboardingResendResponse(BaseModel):
+    """OTP resend response."""
+    signup_id: UUID
+    email: EmailStr
+    expires_at: datetime
+    delivery: str
+    next_resend_at: datetime
     dev_otp: Optional[str] = None
 
 

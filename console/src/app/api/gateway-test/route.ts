@@ -4,10 +4,24 @@ import { sessionStore } from "@/lib/session-store";
 
 type Provider = "openai" | "anthropic" | "cohere" | "gemini";
 
+interface ProviderCredential {
+  provider: string;
+  status: string;
+}
+
 const GATEWAY_URL =
   process.env.GATEWAY_INTERNAL_URL ||
   process.env.NEXT_PUBLIC_GATEWAY_URL ||
   "http://localhost:8080";
+
+const BACKEND_URL = process.env.API_URL || "http://localhost:8000";
+
+const PROVIDER_LABELS: Record<Provider, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  cohere: "Cohere",
+  gemini: "Gemini",
+};
 
 const TESTS: Record<Provider, { path: string; body: unknown }> = {
   openai: {
@@ -62,6 +76,20 @@ function trimBody(value: string) {
   return value.length > 1200 ? `${value.slice(0, 1200)}...` : value;
 }
 
+async function hasActiveProviderCredential(apiKey: string, provider: Provider) {
+  const response = await fetch(`${BACKEND_URL}/v1/provider-credentials`, {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error("Could not check provider key vault");
+  }
+  const credentials = (await response.json()) as ProviderCredential[];
+  return credentials.some((credential) => credential.provider === provider && credential.status === "active");
+}
+
 export async function POST(request: Request) {
   try {
     const cookieStore = await cookies();
@@ -83,6 +111,18 @@ export async function POST(request: Request) {
     const test = TESTS[provider];
     if (!test) {
       return NextResponse.json({ error: "Unsupported provider" }, { status: 400 });
+    }
+
+    const hasProviderKey = await hasActiveProviderCredential(session.apiKey, provider);
+    if (!hasProviderKey) {
+      return NextResponse.json(
+        {
+          error: "ProviderCredentialMissing",
+          message: `Save an active ${PROVIDER_LABELS[provider]} provider API key before running a live gateway test.`,
+          provider,
+        },
+        { status: 409 },
+      );
     }
 
     const requestId = `connect-test-${Date.now()}`;

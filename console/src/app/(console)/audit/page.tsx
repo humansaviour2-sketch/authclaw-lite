@@ -44,6 +44,8 @@ interface AuditRecord {
 export default function AuditPage() {
   const [records, setRecords] = useState<AuditRecord[]>([]);
   const [total, setTotal] = useState(0);
+  const [auditSource, setAuditSource] = useState("");
+  const [integrityCheckedByBackend, setIntegrityCheckedByBackend] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -91,6 +93,8 @@ export default function AuditPage() {
       
       setRecords(data.records || []);
       setTotal(data.total || (data.records ? data.records.length : 0));
+      setAuditSource(data.source || "");
+      setIntegrityCheckedByBackend(Boolean(data.integrity_checked));
     } catch (err: any) {
       console.warn("Audit fetchLogs failed:", err.message);
       setError(err.message || "Could not retrieve audit logs from ClickHouse/Postgres");
@@ -223,7 +227,10 @@ export default function AuditPage() {
             >
               <option value="">All Actions</option>
               <option value="allow">ALLOW</option>
+              <option value="test_request">TEST REQUEST</option>
+              <option value="redact">REDACT</option>
               <option value="block">BLOCK</option>
+              <option value="approval_allow">APPROVAL ALLOW</option>
             </select>
           </div>
 
@@ -302,6 +309,11 @@ export default function AuditPage() {
               <p className="text-slate-500 text-xs mt-1">
                 No logs matched the selected filters or no traffic has been intercepted.
               </p>
+              {auditSource === "postgres" && (
+                <p className="mt-2 text-[11px] text-slate-600">
+                  Using Postgres fallback audit storage.
+                </p>
+              )}
             </div>
           ) : (
             <table className="w-full text-left border-collapse text-xs">
@@ -349,7 +361,7 @@ export default function AuditPage() {
                         <div className="text-[10px] text-slate-500 font-mono mt-0.5">{log.model}</div>
                       </td>
                       <td className="px-6 py-4">
-                        {integrityCheck ? (
+                        {integrityCheck && integrityCheckedByBackend ? (
                           log.chain_valid ? (
                             <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400">
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
@@ -361,6 +373,11 @@ export default function AuditPage() {
                               ⚠️ Tampered
                             </span>
                           )
+                        ) : auditSource === "postgres" ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-sky-400">
+                            <ScrollText className="w-3.5 h-3.5" />
+                            Stored
+                          </span>
                         ) : (
                           <span className="text-slate-600 text-[10px]">Skipped</span>
                         )}
@@ -450,7 +467,7 @@ export default function AuditPage() {
                 <span className="text-[9px] font-black uppercase text-slate-550 block tracking-wider mb-1">
                   CRYPTOGRAPHIC INTEGRITY STATUS
                 </span>
-                {integrityCheck ? (
+                {integrityCheck && integrityCheckedByBackend ? (
                   selectedRecord.chain_valid ? (
                     <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/25 px-2.5 py-0.5 rounded-full">
                       <ShieldCheck className="w-3.5 h-3.5" />
@@ -462,6 +479,11 @@ export default function AuditPage() {
                       Verification Failed (Tampered)
                     </span>
                   )
+                ) : auditSource === "postgres" ? (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-400 bg-sky-500/10 border border-sky-500/25 px-2.5 py-0.5 rounded-full">
+                    <ScrollText className="w-3.5 h-3.5" />
+                    Stored in Postgres Fallback
+                  </span>
                 ) : (
                   <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-550 bg-slate-800 border border-slate-700 px-2.5 py-0.5 rounded-full">
                     Verification Skipped

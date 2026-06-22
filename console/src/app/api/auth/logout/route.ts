@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { sessionStore } from "@/lib/session-store";
+import { sessionCookieOptions } from "@/lib/cookie-options";
 
 export async function POST() {
   const cookieStore = await cookies();
@@ -21,9 +22,8 @@ export async function POST() {
 
   // Delete the session cookie
   response.cookies.set("authclaw_session", "", {
-    httpOnly: true,
+    ...sessionCookieOptions(),
     expires: new Date(0),
-    path: "/",
   });
 
   return response;
