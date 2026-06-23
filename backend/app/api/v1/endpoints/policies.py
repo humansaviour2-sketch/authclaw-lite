@@ -106,8 +106,15 @@ def upload_policy(
             created_by=user_id
         )
         db.add(policy)
+        db.flush()
+        response = {
+            "id": policy.id,
+            "name": policy.name,
+            "version": policy.version,
+            "is_active": policy.is_active,
+            "created_at": policy.created_at,
+        }
         db.commit()
-        db.refresh(policy)
 
         # 5. Publish invalidation event to Redis Pub/Sub to trigger Go gateway hot reload
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -121,7 +128,7 @@ def upload_policy(
             # Non-blocking log: cache invalidation issues should not cause client request failure
             print(f"[WARN] Failed to publish policy invalidation to Redis: {re_err}")
 
-        return policy
+        return response
     except HTTPException:
         raise
     except Exception as e:
