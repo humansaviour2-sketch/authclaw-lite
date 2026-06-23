@@ -254,6 +254,53 @@ func appendRegexAnalyzeResults(results []AnalyzeResult, text, entityType string,
 	return results
 }
 
+func normalizedCustomEntity(rule RegexRule) string {
+	entity := strings.TrimSpace(rule.Entity)
+	if entity == "" {
+		entity = rule.Name
+	}
+	entity = strings.ToUpper(strings.ReplaceAll(entity, " ", "_"))
+	if strings.Contains(entity, "PHONE") || strings.Contains(entity, "MOBILE") {
+		return "PHONE_NUMBER"
+	}
+	return entity
+}
+
+func appendCustomRuleAnalyzeResults(results []AnalyzeResult, text string, customRules []RegexRule) []AnalyzeResult {
+	for _, rule := range customRules {
+		if rule.Pattern == "" || rule.normalizedAction() == "block" {
+			continue
+		}
+		pattern, err := regexp.Compile(rule.Pattern)
+		if err != nil {
+			log.Printf("Skipping invalid custom regex rule %q: %v", rule.Name, err)
+			continue
+		}
+		results = appendRegexAnalyzeResults(results, text, normalizedCustomEntity(rule), pattern)
+	}
+	return results
+}
+
+var phoneLikePattern = regexp.MustCompile(`^\+?\d[\d\s().-]{7,}\d$`)
+
+func normalizeDetectedEntity(entityType, originalValue string, customRules []RegexRule) string {
+	entity := strings.ToUpper(strings.TrimSpace(entityType))
+	trimmed := strings.TrimSpace(originalValue)
+	for _, rule := range customRules {
+		if rule.Pattern == "" || !strings.Contains(normalizedCustomEntity(rule), "PHONE") {
+			continue
+		}
+		pattern, err := regexp.Compile(rule.Pattern)
+		if err == nil && pattern.MatchString(trimmed) {
+			return "PHONE_NUMBER"
+		}
+	}
+	if entity == "UK_NHS" && phoneLikePattern.MatchString(trimmed) {
+		return "PHONE_NUMBER"
+	}
+	return entity
+}
+
 func fallbackAnalyze(text string, customRules []RegexRule) []AnalyzeResult {
 	results := []AnalyzeResult{}
 	builtIns := []struct {
@@ -269,19 +316,7 @@ func fallbackAnalyze(text string, customRules []RegexRule) []AnalyzeResult {
 	for _, item := range builtIns {
 		results = appendRegexAnalyzeResults(results, text, item.entityType, item.pattern)
 	}
-	for _, rule := range customRules {
-		if rule.Pattern == "" || rule.normalizedAction() == "block" {
-			continue
-		}
-		pattern, err := regexp.Compile(rule.Pattern)
-		if err != nil {
-			log.Printf("Skipping invalid fallback regex rule %q: %v", rule.Name, err)
-			continue
-		}
-		entityType := strings.ToUpper(strings.ReplaceAll(rule.Name, " ", "_"))
-		results = appendRegexAnalyzeResults(results, text, entityType, pattern)
-	}
-	return results
+	return appendCustomRuleAnalyzeResults(results, text, customRules)
 }
 
 // Encryption Helpers (AES-256 CBC Deterministic)
@@ -557,6 +592,8 @@ func RedactPrompts(ctx context.Context, tenantID string, prompts []string, custo
 		if err != nil {
 			log.Printf("Presidio analysis failed, using regex fallback: %v", err)
 			results = fallbackAnalyze(prompt, customRules)
+		} else {
+			results = appendCustomRuleAnalyzeResults(results, prompt, customRules)
 		}
 
 		// Sort results descending by start index to prevent offset issues during replacements
@@ -581,7 +618,8 @@ func RedactPrompts(ctx context.Context, tenantID string, prompts []string, custo
 			}
 
 			originalVal := string(runes[entity.Start:entity.End])
-			tokenVal, err := GetOrCreateRedactionToken(ctx, tenantID, originalVal, entity.EntityType, strategy)
+			entityType := normalizeDetectedEntity(entity.EntityType, originalVal, customRules)
+			tokenVal, err := GetOrCreateRedactionToken(ctx, tenantID, originalVal, entityType, strategy)
 			if err != nil {
 				return nil, nil, err
 			}

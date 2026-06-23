@@ -231,6 +231,7 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// HITL gate for high-risk custom redaction policies.
 	// This runs before redaction and before provider egress. The prompt itself is not
 	// stored in the approval payload; only hashes and policy metadata are stored.
+	finalAllowReason := "Allowed"
 	if normalized != nil && len(normalized.Prompts) > 0 {
 		approvalMatch, approvalMatchErr := FindApprovalRuleMatch(config, normalized.Prompts)
 		if approvalMatchErr != nil {
@@ -296,6 +297,7 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				Provider:       provider, Model: model, PromptCount: promptCount,
 				RequestSize: int(r.ContentLength), ResponseStatus: http.StatusOK, DurationMs: 0,
 			})
+			finalAllowReason = fmt.Sprintf("HITL approved: %s", approvalMatch.Rule.Reason)
 		}
 	}
 
@@ -310,6 +312,11 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[DEBUG] ORIGINAL PROMPT: %v", normalized.Prompts)
 				log.Printf("[DEBUG] REDACTED PROMPT: %v", redactedPrompts)
 				if len(tokenMap) > 0 {
+					if finalAllowReason == "Allowed" {
+						finalAllowReason = "Allowed after redaction"
+					} else if !strings.Contains(strings.ToLower(finalAllowReason), "redact") {
+						finalAllowReason += " + redacted"
+					}
 					EmitAuditEvent(&AuditEvent{
 						ID:             generateID(),
 						RequestID:      requestID,
@@ -510,7 +517,7 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		TenantID:       tenantID,
 		PolicyID:       policyID,
 		Action:         auditAction,
-		DecisionReason: "Allowed",
+		DecisionReason: finalAllowReason,
 		Provider:       provider,
 		Model:          model,
 		PromptCount:    promptCount,

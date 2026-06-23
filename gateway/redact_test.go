@@ -14,6 +14,15 @@ import (
 	"github.com/lib/pq"
 )
 
+func TestNormalizeDetectedEntityTreatsPhoneLikeUkNhsAsPhoneNumber(t *testing.T) {
+	entity := normalizeDetectedEntity("UK_NHS", "9876543210", []RegexRule{
+		{Name: "Phone", Pattern: `(\+?[0-9]{1,3}[-. ]?)?[0-9]{10}`, Action: "require_approval"},
+	})
+	if entity != "PHONE_NUMBER" {
+		t.Fatalf("expected PHONE_NUMBER, got %s", entity)
+	}
+}
+
 func TestRedactEngine(t *testing.T) {
 	// 1. Init DB
 	InitDB()
