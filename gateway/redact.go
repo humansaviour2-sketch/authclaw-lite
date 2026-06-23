@@ -531,15 +531,35 @@ func GetOrCreateRedactionToken(ctx context.Context, tenantID, originalValue, ent
 		return "", err
 	}
 
+	shouldRelabelToken := func(tokenValue string) bool {
+		if entityType != "PHONE_NUMBER" {
+			return false
+		}
+		return strings.Contains(tokenValue, "_UK_NHS_") ||
+			strings.Contains(tokenValue, "_UK_NATIONAL_ID_")
+	}
+
 	var tokenVal string
 
 	err = RunInTenantTx(ctx, tenantID, func(tx *sql.Tx) error {
+		var tokenID string
 		err := tx.QueryRowContext(ctx,
-			"SELECT token_value FROM redaction_tokens WHERE tenant_id = $1 AND original_value = $2 AND strategy = $3 LIMIT 1",
+			"SELECT id::text, token_value FROM redaction_tokens WHERE tenant_id = $1 AND original_value = $2 AND strategy = $3 LIMIT 1",
 			tenantID, encVal, strategy,
-		).Scan(&tokenVal)
+		).Scan(&tokenID, &tokenVal)
 
 		if err == nil {
+			if shouldRelabelToken(tokenVal) {
+				tokenVal, err = GenerateTokenValue(ctx, tx, tenantID, originalValue, entityType, strategy)
+				if err != nil {
+					return err
+				}
+				_, err = tx.ExecContext(ctx,
+					"UPDATE redaction_tokens SET token_value = $1, token_hash = $2 WHERE tenant_id = $3 AND id = $4::uuid",
+					tokenVal, hashToken(tokenVal), tenantID, tokenID,
+				)
+				return err
+			}
 			return nil
 		}
 		if err != sql.ErrNoRows {
