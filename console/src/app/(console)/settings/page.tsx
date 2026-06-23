@@ -38,6 +38,7 @@ interface APIKeyItem {
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<"users" | "keys" | "tenant">("users");
+  const controlPlaneHost = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   
   // List States
   const [users, setUsers] = useState<UserItem[]>([]);
@@ -445,7 +446,7 @@ export default function SettingsPage() {
 
               <div>
                 <p className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Control Plane Host</p>
-                <p className="text-slate-300 mt-1 font-mono">http://localhost:8000/v1</p>
+                <p className="text-slate-300 mt-1 font-mono">{controlPlaneHost}/v1</p>
               </div>
             </div>
 

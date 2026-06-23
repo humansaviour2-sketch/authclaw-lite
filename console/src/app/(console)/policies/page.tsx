@@ -32,6 +32,12 @@ interface PolicyVersion {
   created_at: string;
 }
 
+interface ParsedPolicyYaml {
+  rules: RedactionRule[];
+  modelWhitelist: string[];
+  requestsPerMinute?: number;
+}
+
 const defaultRules: RedactionRule[] = [
   {
     id: "email",
@@ -69,6 +75,129 @@ function errorMessage(error: unknown, fallback: string) {
 
 function newClientId() {
   return globalThis.crypto?.randomUUID?.() ?? `rule-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function unquoteYamlScalar(value: string) {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1).replace(/''/g, "'");
+  }
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      return JSON.parse(trimmed) as string;
+    } catch {
+      return trimmed.slice(1, -1);
+    }
+  }
+  return trimmed;
+}
+
+function coerceRuleAction(value: string): RuleAction {
+  return value === "require_approval" || value === "block" ? value : "redact";
+}
+
+function coerceRuleSeverity(value: string): RuleSeverity {
+  return value === "low" || value === "high" || value === "critical" ? value : "medium";
+}
+
+function parsePolicyYaml(yaml: string): ParsedPolicyYaml | null {
+  const lines = yaml.split(/\r?\n/);
+  const rules: RedactionRule[] = [];
+  const modelWhitelist: string[] = [];
+  let requestsPerMinute: number | undefined;
+  let section = "";
+  let inWhitelist = false;
+  let currentRule: Partial<RedactionRule> | null = null;
+
+  const pushRule = () => {
+    if (!currentRule?.name && !currentRule?.pattern) return;
+    rules.push({
+      id: newClientId(),
+      name: currentRule.name || "custom_rule",
+      pattern: currentRule.pattern || "",
+      reason: currentRule.reason || "Custom governance rule matched.",
+      severity: currentRule.severity || "medium",
+      action: currentRule.action || "redact",
+    });
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    if (line === "regex_rules:") {
+      pushRule();
+      currentRule = null;
+      section = "regex";
+      inWhitelist = false;
+      continue;
+    }
+    if (line === "model_rules:") {
+      pushRule();
+      currentRule = null;
+      section = "model";
+      inWhitelist = false;
+      continue;
+    }
+    if (line === "topic_rules:" || line.startsWith("topic_rules:")) {
+      pushRule();
+      currentRule = null;
+      section = "topic";
+      inWhitelist = false;
+      continue;
+    }
+    if (line === "rate_limits:") {
+      pushRule();
+      currentRule = null;
+      section = "rate";
+      inWhitelist = false;
+      continue;
+    }
+
+    if (section === "regex") {
+      if (line.startsWith("- name:")) {
+        pushRule();
+        currentRule = { name: unquoteYamlScalar(line.slice("- name:".length)) };
+        continue;
+      }
+      if (!currentRule) continue;
+      if (line.startsWith("pattern:")) {
+        currentRule.pattern = unquoteYamlScalar(line.slice("pattern:".length));
+      } else if (line.startsWith("reason:")) {
+        currentRule.reason = unquoteYamlScalar(line.slice("reason:".length));
+      } else if (line.startsWith("severity:")) {
+        currentRule.severity = coerceRuleSeverity(unquoteYamlScalar(line.slice("severity:".length)));
+      } else if (line.startsWith("action:")) {
+        currentRule.action = coerceRuleAction(unquoteYamlScalar(line.slice("action:".length)));
+      }
+      continue;
+    }
+
+    if (section === "model") {
+      if (line === "whitelist:") {
+        inWhitelist = true;
+        continue;
+      }
+      if (line.startsWith("blacklist:")) {
+        inWhitelist = false;
+        continue;
+      }
+      if (inWhitelist && line.startsWith("- ")) {
+        modelWhitelist.push(unquoteYamlScalar(line.slice(2)));
+      }
+      continue;
+    }
+
+    if (section === "rate" && line.startsWith("requests_per_minute:")) {
+      const parsed = Number(unquoteYamlScalar(line.slice("requests_per_minute:".length)));
+      if (Number.isFinite(parsed) && parsed > 0) {
+        requestsPerMinute = parsed;
+      }
+    }
+  }
+
+  pushRule();
+  return rules.length || modelWhitelist.length || requestsPerMinute ? { rules, modelWhitelist, requestsPerMinute } : null;
 }
 
 function buildPolicyYaml(rules: RedactionRule[], modelWhitelist: string[], requestsPerMinute: number) {
@@ -137,9 +266,22 @@ export default function PoliciesPage() {
         ]);
         if (activeRes.ok) {
           const active = await activeRes.json();
-          setActiveYaml(active.policy_yaml || "");
+          const policyYaml = active.policy_yaml || "";
+          setActiveYaml(policyYaml);
           setPolicyName(active.name || "AuthClaw Lite Governance Policy");
           setPolicyDesc(active.description || "Custom redaction, HITL approval, and block rules for gateway traffic.");
+          const parsed = parsePolicyYaml(policyYaml);
+          if (parsed) {
+            if (parsed.rules.length > 0) {
+              setRules(parsed.rules);
+            }
+            if (parsed.modelWhitelist.length > 0) {
+              setModelInput(parsed.modelWhitelist.join(", "));
+            }
+            if (parsed.requestsPerMinute) {
+              setRequestsPerMinute(parsed.requestsPerMinute);
+            }
+          }
         }
       } catch (err: unknown) {
         console.warn("Policy bootstrap failed:", errorMessage(err, "Policy bootstrap failed"));
@@ -406,8 +548,7 @@ export default function PoliciesPage() {
             <section className="rounded-lg bg-[#09090d] border border-slate-800 p-4">
               <h2 className="text-sm font-bold text-white mb-2">Active Policy Loaded</h2>
               <p className="text-xs text-slate-500">
-                The builder starts from the Lite template. The active deployed YAML remains visible in history and will be
-                replaced when you deploy this generated policy.
+                The builder is hydrated from the active deployed YAML and will replace it when you deploy changes.
               </p>
             </section>
           )}
