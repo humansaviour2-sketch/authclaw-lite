@@ -118,6 +118,7 @@ interface GatewayTestResult {
 }
 
 interface OnboardingConnectResult {
+  tenant_id?: string;
   tenant_name: string;
   email: string;
   api_key: string;
@@ -239,18 +240,40 @@ export default function ConnectPage() {
   }, []);
 
   useEffect(() => {
-    const saved = window.sessionStorage.getItem("authclaw_onboarding_result");
-    if (!saved) return;
-    try {
-      const parsed = JSON.parse(saved) as OnboardingConnectResult;
-      setOnboardingResult(parsed);
-      if (parsed.provider && parsed.provider in providerExamples) {
-        setProvider(parsed.provider as Provider);
-        setCredentialProvider(parsed.provider as Provider);
+    let cancelled = false;
+
+    const loadOnboardingResult = async () => {
+      const saved = window.sessionStorage.getItem("authclaw_onboarding_result");
+      if (!saved) return;
+      try {
+        const parsed = JSON.parse(saved) as OnboardingConnectResult;
+        const sessionRes = await fetch("/api/auth/session", { cache: "no-store" });
+        if (!sessionRes.ok) {
+          window.sessionStorage.removeItem("authclaw_onboarding_result");
+          return;
+        }
+        const session = await sessionRes.json();
+        const belongsToCurrentTenant = parsed.tenant_id && parsed.tenant_id === session.tenantId;
+        const belongsToCurrentEmail = parsed.email && parsed.email === session.email;
+        if (!belongsToCurrentTenant || !belongsToCurrentEmail) {
+          window.sessionStorage.removeItem("authclaw_onboarding_result");
+          return;
+        }
+        if (cancelled) return;
+        setOnboardingResult(parsed);
+        if (parsed.provider && parsed.provider in providerExamples) {
+          setProvider(parsed.provider as Provider);
+          setCredentialProvider(parsed.provider as Provider);
+        }
+      } catch {
+        window.sessionStorage.removeItem("authclaw_onboarding_result");
       }
-    } catch {
-      window.sessionStorage.removeItem("authclaw_onboarding_result");
-    }
+    };
+
+    void loadOnboardingResult();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const decideApproval = async (id: string, decision: "approve" | "reject") => {

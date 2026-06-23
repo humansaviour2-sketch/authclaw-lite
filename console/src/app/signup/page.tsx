@@ -72,6 +72,7 @@ export default function SignupPage() {
     setLoading(true);
     setError(null);
     try {
+      window.sessionStorage.removeItem("authclaw_onboarding_result");
       const response = await fetch("/api/onboarding/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

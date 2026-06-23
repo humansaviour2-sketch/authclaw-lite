@@ -60,7 +60,7 @@ const defaultRules: RedactionRule[] = [
 ];
 
 function yamlQuote(value: string) {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  return `'${value.replace(/'/g, "''")}'`;
 }
 
 function errorMessage(error: unknown, fallback: string) {
