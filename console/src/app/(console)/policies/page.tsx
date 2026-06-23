@@ -67,6 +67,10 @@ function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
+function newClientId() {
+  return globalThis.crypto?.randomUUID?.() ?? `rule-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function buildPolicyYaml(rules: RedactionRule[], modelWhitelist: string[], requestsPerMinute: number) {
   const ruleYaml = rules
     .map((rule) => {
@@ -151,7 +155,7 @@ export default function PoliciesPage() {
     setRules((current) => [
       ...current,
       {
-        id: crypto.randomUUID(),
+        id: newClientId(),
         name: "custom_rule",
         pattern: "(?i)custom sensitive phrase",
         reason: "Custom sensitive content matched.",
