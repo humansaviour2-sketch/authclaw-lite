@@ -20,6 +20,7 @@ import {
   ShieldCheck,
   ShieldAlert
 } from "lucide-react";
+import { copyTextToClipboard } from "@/lib/clipboard";
 
 interface AuditRecord {
   record_id: string;
@@ -53,8 +54,8 @@ export default function AuditPage() {
   const [selectedRecord, setSelectedRecord] = useState<AuditRecord | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
-  const handleCopy = (text: string, field: string) => {
-    navigator.clipboard.writeText(text);
+  const handleCopy = async (text: string, field: string) => {
+    await copyTextToClipboard(text);
     setCopiedField(field);
     setTimeout(() => setCopiedField(null), 2000);
   };

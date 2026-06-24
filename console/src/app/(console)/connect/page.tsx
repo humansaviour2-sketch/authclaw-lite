@@ -12,6 +12,7 @@ import {
   Route,
   ShieldCheck,
 } from "lucide-react";
+import { copyTextToClipboard } from "@/lib/clipboard";
 
 const providerExamples = {
   openai: {
@@ -167,7 +168,7 @@ export default function ConnectPage() {
   }, [gatewayUrl, selected]);
 
   const copy = async (id: string, value: string) => {
-    await navigator.clipboard.writeText(value);
+    await copyTextToClipboard(value);
     setCopied(id);
     setTimeout(() => setCopied(null), 1500);
   };
