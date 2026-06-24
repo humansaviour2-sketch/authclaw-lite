@@ -1,23 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from uuid import UUID
-import uuid
 
 from app.db.models import User
 from app.schemas.models import UserCreate, UserResponse
-from app.core.auth import get_tenant_db, require_scopes
+from app.core.auth import get_tenant_db, require_roles
 
 router = APIRouter()
 
 
-@router.get("", response_model=list[UserResponse], dependencies=[require_scopes(["read"])])
+@router.get("", response_model=list[UserResponse], dependencies=[require_roles(["owner", "admin"])])
 def list_users(request: Request, db: Session = Depends(get_tenant_db)):
     """List all users for the tenant (isolated by tenant RLS)"""
     tenant_id = request.state.tenant_id
     return db.query(User).filter(User.tenant_id == tenant_id).all()
 
 
-@router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_scopes(["write"])])
+@router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_roles(["owner"])])
 def create_user(
     request: Request,
     user_in: UserCreate,
@@ -59,7 +58,7 @@ def create_user(
         )
 
 
-@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_scopes(["write"])])
+@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_roles(["owner"])])
 def delete_user(
     id: UUID,
     request: Request,
@@ -73,5 +72,18 @@ def delete_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    db.delete(user)
+
+    if user.role == "owner":
+        active_owner_count = db.query(User).filter(
+            User.tenant_id == tenant_id,
+            User.role == "owner",
+            User.is_active == True,
+        ).count()
+        if active_owner_count <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot remove the last active owner"
+            )
+
+    user.is_active = False
     db.commit()

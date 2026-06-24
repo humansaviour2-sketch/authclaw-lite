@@ -19,6 +19,14 @@ export function middleware(request: NextRequest) {
 
   // 2. Extract session cookie
   const sessionCookie = request.cookies.get("authclaw_session")?.value;
+  let sessionRole = "viewer";
+  if (sessionCookie) {
+    try {
+      sessionRole = (JSON.parse(sessionCookie).role || "viewer").toLowerCase();
+    } catch {
+      sessionRole = "viewer";
+    }
+  }
 
   // 3. Handle redirects
   if (!sessionCookie && !isPublicPath) {
@@ -42,6 +50,15 @@ export function middleware(request: NextRequest) {
 
   if (demoMode && demoBlockedPaths.some((blockedPath) => path === blockedPath || path.startsWith(`${blockedPath}/`))) {
     return NextResponse.redirect(new URL("/connect", request.url));
+  }
+
+  const viewerBlockedPaths = ["/connect", "/gateway", "/policies", "/settings"];
+  if (
+    sessionCookie &&
+    sessionRole === "viewer" &&
+    viewerBlockedPaths.some((blockedPath) => path === blockedPath || path.startsWith(`${blockedPath}/`))
+  ) {
+    return NextResponse.redirect(new URL("/overview", request.url));
   }
 
   return NextResponse.next();

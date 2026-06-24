@@ -33,9 +33,33 @@ export async function POST(request: Request) {
 
     const { tenant_id: tenantId, scopes, created_by: userId } = res.rows[0];
 
-    // Query tenant name
-    const tenantRes = await queryWithTenantContext(tenantId, "SELECT name FROM tenants WHERE id = $1", [tenantId]);
-    const tenantName = tenantRes.rowCount && tenantRes.rowCount > 0 ? tenantRes.rows[0].name : "Default Tenant";
+    const tenantRes = await queryWithTenantContext(
+      tenantId,
+      "SELECT name, status FROM tenants WHERE id = $1",
+      [tenantId]
+    );
+    const tenant = tenantRes.rowCount && tenantRes.rowCount > 0 ? tenantRes.rows[0] : null;
+    if (!tenant || tenant.status !== "active") {
+      return NextResponse.json(
+        { message: "Tenant is not active" },
+        { status: 403 }
+      );
+    }
+    const tenantName = tenant.name || "Default Tenant";
+
+    const userRes = await queryWithTenantContext(
+      tenantId,
+      "SELECT email, role, is_active FROM users WHERE id = $1 AND tenant_id = $2",
+      [userId, tenantId]
+    );
+    const user = userRes.rowCount && userRes.rowCount > 0 ? userRes.rows[0] : null;
+    if (!user || !user.is_active) {
+      return NextResponse.json(
+        { message: "User is inactive or not found" },
+        { status: 401 }
+      );
+    }
+    const role = user.role || "viewer";
 
     // 3. Create server-side session
     const session = sessionStore.createSession({
@@ -43,6 +67,7 @@ export async function POST(request: Request) {
       userId,
       tenantId,
       scopes,
+      role,
     });
 
     // 4. Build secure cookie payload (WITHOUT raw api key)
@@ -52,7 +77,8 @@ export async function POST(request: Request) {
       tenantId,
       tenantName,
       scopes,
-      email: email || "admin@authclaw.com",
+      role,
+      email: user.email || email || "admin@authclaw.com",
     };
 
     const response = NextResponse.json({ success: true, user: cookiePayload });

@@ -10,6 +10,7 @@ export interface SessionData {
   userId: string;
   tenantId: string;
   scopes: string[];
+  role: string;
   apiKey: string;
   createdAt: number;
 }

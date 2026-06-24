@@ -44,6 +44,7 @@ export default function SettingsPage() {
   const [users, setUsers] = useState<UserItem[]>([]);
   const [apiKeys, setApiKeys] = useState<APIKeyItem[]>([]);
   const [tenantId, setTenantId] = useState("Unknown");
+  const [sessionRole, setSessionRole] = useState("viewer");
   const [loading, setLoading] = useState(true);
 
   // User Form Modal States
@@ -61,6 +62,9 @@ export default function SettingsPage() {
   const [keySubmitting, setKeySubmitting] = useState(false);
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [tenantActionError, setTenantActionError] = useState<string | null>(null);
+  const [tenantActionBusy, setTenantActionBusy] = useState(false);
+  const isOwner = sessionRole === "owner";
 
   const fetchUsersAndKeys = async () => {
     try {
@@ -109,6 +113,7 @@ export default function SettingsPage() {
       if (res.ok) {
         const data = await res.json();
         setTenantId(data.tenantId || "Unknown");
+        setSessionRole((data.role || "viewer").toLowerCase());
       }
     } catch (err: any) {
       console.warn("Settings fetchSession failed:", err.message);
@@ -154,6 +159,7 @@ export default function SettingsPage() {
   };
 
   const handleDeleteUser = async (id: string) => {
+    if (!isOwner) return;
     if (!confirm("Are you sure you want to remove this user from the tenant?")) return;
     try {
       const res = await fetch(`/api/users/${id}`, { method: "DELETE" });
@@ -166,6 +172,7 @@ export default function SettingsPage() {
 
   const handleGenerateKey = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isOwner) return;
     if (!keyName) return;
     setKeySubmitting(true);
     setKeyError(null);
@@ -198,6 +205,7 @@ export default function SettingsPage() {
   };
 
   const handleRevokeKey = async (id: string) => {
+    if (!isOwner) return;
     if (!confirm("Are you sure you want to revoke this API key? Systems utilizing this key will be rejected immediately.")) return;
     try {
       const res = await fetch(`/api/api-keys/${id}`, { method: "DELETE" });
@@ -223,6 +231,34 @@ export default function SettingsPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleDisableTenant = async () => {
+    if (!isOwner) return;
+    const confirmed = confirm(
+      "Disable this tenant? New console and gateway requests for this tenant will be rejected until it is reactivated from the backend."
+    );
+    if (!confirmed) return;
+    setTenantActionBusy(true);
+    setTenantActionError(null);
+    try {
+      const res = await fetch("/api/tenants/current/status", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "disabled" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to disable tenant");
+      }
+      alert("Tenant disabled. You will be signed out.");
+      await fetch("/api/auth/logout", { method: "POST" });
+      window.location.href = "/login";
+    } catch (err: any) {
+      setTenantActionError(err.message || "Could not disable tenant");
+    } finally {
+      setTenantActionBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -231,7 +267,7 @@ export default function SettingsPage() {
           Tenant Settings
         </h1>
         <p className="text-slate-400 text-sm mt-1">
-          Manage tenant members, allocate developer roles, configure API keys, and monitor MFA.
+          Manage tenant members, assign roles, configure API keys, and monitor MFA.
         </p>
       </div>
 
@@ -248,8 +284,9 @@ export default function SettingsPage() {
         </button>
         <button
           onClick={() => setActiveTab("keys")}
+          disabled={!isOwner}
           className={`pb-3.5 text-sm font-semibold transition relative ${
-            activeTab === "keys" ? "text-indigo-400" : "text-slate-400 hover:text-slate-200"
+            !isOwner ? "text-slate-700 cursor-not-allowed" : activeTab === "keys" ? "text-indigo-400" : "text-slate-400 hover:text-slate-200"
           }`}
         >
           {activeTab === "keys" && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500 rounded-full" />}
@@ -279,10 +316,11 @@ export default function SettingsPage() {
             </div>
             <button
               onClick={() => { setUserEmail(""); setUserRole("viewer"); setUserError(null); setIsUserModalOpen(true); }}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-650 hover:bg-indigo-600 text-white font-semibold text-xs transition"
+              disabled={!isOwner}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-650 hover:bg-indigo-600 text-white font-semibold text-xs transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Plus className="w-4 h-4" />
-              Add Member
+              {isOwner ? "Add Member" : "Owner Only"}
             </button>
           </div>
 
@@ -330,12 +368,16 @@ export default function SettingsPage() {
                         {new Date(u.created_at).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <button
-                          onClick={() => handleDeleteUser(u.id)}
-                          className="p-1.5 rounded bg-red-950/20 hover:bg-red-950/80 text-red-400 border border-red-900/30 hover:border-red-800 transition"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {isOwner ? (
+                          <button
+                            onClick={() => handleDeleteUser(u.id)}
+                            className="p-1.5 rounded bg-red-950/20 hover:bg-red-950/80 text-red-400 border border-red-900/30 hover:border-red-800 transition"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-slate-600">Owner only</span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -347,7 +389,7 @@ export default function SettingsPage() {
       )}
 
       {/* Tab: API Keys Lifecycle */}
-      {activeTab === "keys" && (
+      {activeTab === "keys" && isOwner && (
         <div className="space-y-6">
           <div className="flex justify-between items-center bg-[#09090d] border border-slate-800 p-4 rounded-xl">
             <div className="text-xs">
@@ -453,7 +495,8 @@ export default function SettingsPage() {
             <div className="space-y-4">
               <div>
                 <p className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Security Strategy</p>
-                <p className="text-slate-300 mt-1.5">Row Level Isolation (RLS) is active on the PostgreSQL storage layer.</p>
+              <p className="text-slate-300 mt-1.5">Row Level Isolation (RLS) is active on the PostgreSQL storage layer.</p>
+                <p className="text-slate-500 mt-1.5">Current console role: <span className="capitalize text-slate-300">{sessionRole}</span></p>
               </div>
 
               <div>
@@ -464,6 +507,32 @@ export default function SettingsPage() {
               </div>
             </div>
           </div>
+
+          {isOwner && (
+            <div className="border-t border-slate-800 pt-5 max-w-2xl">
+              <div className="rounded-xl border border-red-900/40 bg-red-950/10 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-red-200 flex items-center gap-2">
+                      <ShieldAlert className="w-4 h-4" />
+                      Disable Tenant
+                    </h4>
+                    <p className="text-xs text-red-200/70 mt-1">
+                      Suspends console and gateway access for this tenant without deleting audit evidence.
+                    </p>
+                    {tenantActionError && <p className="text-xs text-red-300 mt-2">{tenantActionError}</p>}
+                  </div>
+                  <button
+                    onClick={handleDisableTenant}
+                    disabled={tenantActionBusy}
+                    className="shrink-0 rounded-lg border border-red-800 bg-red-950/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-900/40 disabled:opacity-50"
+                  >
+                    {tenantActionBusy ? "Disabling..." : "Disable"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -517,10 +586,8 @@ export default function SettingsPage() {
                   onChange={(e) => setUserRole(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg bg-[#07070a] border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-indigo-500/80 transition"
                 >
-                  <option value="viewer">Viewer (Read-only)</option>
-                  <option value="developer">Developer (Keys & snippets)</option>
-                  <option value="operator">Operator (Legacy read / write)</option>
-                  <option value="admin">Admin (Policy & users)</option>
+                  <option value="viewer">Viewer (Overview & audit)</option>
+                  <option value="admin">Admin (Policies & provider keys)</option>
                   <option value="owner">Owner (Tenant control)</option>
                 </select>
               </div>

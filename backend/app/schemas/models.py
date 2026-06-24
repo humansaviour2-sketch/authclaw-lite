@@ -24,11 +24,16 @@ class TenantResponse(BaseModel):
         from_attributes = True
 
 
+class TenantStatusUpdate(BaseModel):
+    """Schema for changing the active tenant lifecycle state."""
+    status: str = Field(..., pattern="^(active|disabled|suspended)$")
+
+
 class UserCreate(BaseModel):
     """Schema for creating a user"""
     email: EmailStr
     password: str = Field(..., min_length=8)
-    role: str = Field(default="viewer", pattern="^(owner|admin|developer|operator|viewer)$")
+    role: str = Field(default="viewer", pattern="^(owner|admin|viewer)$")
 
 
 class UserResponse(BaseModel):
