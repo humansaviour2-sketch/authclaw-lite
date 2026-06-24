@@ -14,6 +14,22 @@ class BackendRequestError extends Error {
   }
 }
 
+function apiErrorMessage(data: any, fallback: string): string {
+  const candidate = data?.detail ?? data?.message ?? data?.error;
+  if (typeof candidate === "string") return candidate;
+  if (Array.isArray(candidate)) {
+    const messages = candidate
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object" && "msg" in item) return String(item.msg);
+        return "";
+      })
+      .filter(Boolean);
+    if (messages.length) return messages.join(" ");
+  }
+  return fallback;
+}
+
 interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
 }
@@ -62,7 +78,7 @@ export async function backendFetch(path: string, options: RequestOptions = {}) {
     let errorDetail = "Backend request failed";
     try {
       const errorJson = await response.json();
-      errorDetail = errorJson.detail || errorJson.message || errorDetail;
+      errorDetail = apiErrorMessage(errorJson, errorDetail);
     } catch {
       // ignore JSON parse error
     }

@@ -99,23 +99,32 @@ def invite_user(
         OnboardingEmailOTP.status == "pending",
         OnboardingEmailOTP.purpose == "invite",
     ).first()
-    if pending:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A pending invite already exists for this email")
 
     otp = _generate_otp()
-    invite_row = OnboardingEmailOTP(
-        email=email,
-        tenant_name=tenant.name,
-        otp_hash=_otp_hash(email, otp),
-        status="pending",
-        expires_at=expires_at,
-        sent_at=now,
-        purpose="invite",
-        invited_role=invite_in.role,
-        invited_by=inviter_id,
-        tenant_id=tenant_id,
-    )
-    db.add(invite_row)
+    if pending:
+        invite_row = pending
+        invite_row.otp_hash = _otp_hash(email, otp)
+        invite_row.attempts = 0
+        invite_row.expires_at = expires_at
+        invite_row.sent_at = now
+        invite_row.resend_count = (invite_row.resend_count or 0) + 1
+        invite_row.invited_role = invite_in.role
+        invite_row.invited_by = inviter_id
+        invite_row.delivery_error = None
+    else:
+        invite_row = OnboardingEmailOTP(
+            email=email,
+            tenant_name=tenant.name,
+            otp_hash=_otp_hash(email, otp),
+            status="pending",
+            expires_at=expires_at,
+            sent_at=now,
+            purpose="invite",
+            invited_role=invite_in.role,
+            invited_by=inviter_id,
+            tenant_id=tenant_id,
+        )
+        db.add(invite_row)
     db.flush()
 
     console_url = (
