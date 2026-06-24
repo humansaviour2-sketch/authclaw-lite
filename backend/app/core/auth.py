@@ -91,7 +91,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     content={"detail": "Unauthorized: User is inactive or not found"}
                 )
-            if principal.tenant_status != "active":
+            tenant_lifecycle_path = path in {"/v1/tenants/current", "/v1/tenants/current/status"}
+            if principal.tenant_status != "active" and not tenant_lifecycle_path:
                 return JSONResponse(
                     status_code=status.HTTP_403_FORBIDDEN,
                     content={"detail": "Forbidden: Tenant is not active"}

@@ -24,7 +24,14 @@ def smtp_configured() -> bool:
     return bool(os.getenv("SMTP_HOST", "").strip())
 
 
-def send_otp_email(email: str, otp: str, tenant_name: str) -> EmailDeliveryResult:
+def send_otp_email(
+    email: str,
+    otp: str,
+    tenant_name: str,
+    *,
+    purpose: str = "tenant setup",
+    action_url: str | None = None,
+) -> EmailDeliveryResult:
     smtp_host = os.getenv("SMTP_HOST", "").strip()
     if not smtp_host:
         if demo_otp_visible():
@@ -42,11 +49,14 @@ def send_otp_email(email: str, otp: str, tenant_name: str) -> EmailDeliveryResul
     message["Subject"] = "Your AuthClaw verification code"
     message["From"] = smtp_from
     message["To"] = email
-    message.set_content(
+    body = (
         f"Your AuthClaw verification code is {otp}.\n\n"
-        f"It expires in 15 minutes for tenant setup: {tenant_name}.\n\n"
-        "If you did not request this code, you can ignore this email."
+        f"It expires in 15 minutes for {purpose}: {tenant_name}.\n\n"
     )
+    if action_url:
+        body += f"Open this invite link to verify: {action_url}\n\n"
+    body += "If you did not request this code, you can ignore this email."
+    message.set_content(body)
 
     try:
         with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:

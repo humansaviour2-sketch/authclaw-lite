@@ -163,6 +163,12 @@ def _generate_gateway_key() -> str:
     return "acl_live_" + secrets.token_urlsafe(24)
 
 
+def _scopes_for_role(role: str) -> list[str]:
+    if role in ("owner", "admin"):
+        return ["admin", "read", "write"]
+    return ["read"]
+
+
 def _next_resend_at(sent_at: datetime | None) -> datetime:
     base = sent_at or datetime.now(timezone.utc)
     if base.tzinfo is None:
@@ -170,8 +176,15 @@ def _next_resend_at(sent_at: datetime | None) -> datetime:
     return base + timedelta(seconds=OTP_RESEND_COOLDOWN_SECONDS)
 
 
-def _deliver_otp(email: str, otp: str, tenant_name: str) -> tuple[str, str | None]:
-    result = send_otp_email(email, otp, tenant_name)
+def _deliver_otp(
+    email: str,
+    otp: str,
+    tenant_name: str,
+    *,
+    purpose: str = "tenant setup",
+    action_url: str | None = None,
+) -> tuple[str, str | None]:
+    result = send_otp_email(email, otp, tenant_name, purpose=purpose, action_url=action_url)
     dev_otp = otp if result.method == "console" and demo_otp_visible() else None
     return result.method, dev_otp
 
@@ -385,6 +398,79 @@ def verify(payload: OnboardingVerifyRequest, request: Request):
         if signup_row.otp_hash != _otp_hash(signup_row.email, payload.otp):
             db.commit()
             raise HTTPException(status_code=400, detail="Invalid verification code")
+
+        if getattr(signup_row, "purpose", "signup") == "invite":
+            if not signup_row.tenant_id:
+                raise HTTPException(status_code=400, detail="Invite is missing tenant context")
+            tenant = db.query(Tenant).filter(Tenant.id == signup_row.tenant_id).first()
+            if not tenant or tenant.status != "active":
+                raise HTTPException(status_code=400, detail="Invite tenant is not active")
+            if db.query(User).filter(
+                User.tenant_id == tenant.id,
+                User.email == signup_row.email,
+                User.is_active == True,
+            ).first():
+                raise HTTPException(status_code=409, detail="An active user already exists for this tenant")
+
+            db.execute(text("SELECT set_config('app.current_tenant_id', :tenant_id, false)"), {"tenant_id": str(tenant.id)})
+            invited_role = signup_row.invited_role or "viewer"
+            user = User(
+                tenant_id=tenant.id,
+                email=signup_row.email,
+                role=invited_role,
+                mfa_enabled=False,
+                is_active=True,
+            )
+            db.add(user)
+            db.flush()
+
+            raw_api_key = _generate_gateway_key()
+            api_key = APIKey(
+                tenant_id=tenant.id,
+                key_hash=_api_key_hash(raw_api_key),
+                name=f"Console Access - {signup_row.email}",
+                description="Issued during AuthClaw Lite tenant invite verification",
+                scopes=_scopes_for_role(invited_role),
+                is_active=True,
+                created_by=user.id,
+            )
+            db.add(api_key)
+            signup_row.status = "verified"
+            signup_row.verified_at = now
+            signup_row.api_key_id = api_key.id
+            db.commit()
+
+            status_row = db.query(OnboardingStatus).filter(OnboardingStatus.tenant_id == tenant.id).first()
+            if not status_row:
+                status_row = OnboardingStatus(
+                    tenant_id=tenant.id,
+                    user_id=user.id,
+                    email_verified=True,
+                    tenant_created=True,
+                    api_key_issued=True,
+                    route_created=True,
+                    policy_created=True,
+                    current_step="connect_provider",
+                )
+                db.add(status_row)
+                db.commit()
+                db.refresh(status_row)
+
+            powershell, curl = _snippets(raw_api_key, gateway_url)
+            return OnboardingVerifyResponse(
+                tenant_id=tenant.id,
+                tenant_name=tenant.name,
+                user_id=user.id,
+                email=user.email,
+                role=user.role,
+                api_key=raw_api_key,
+                gateway_url=gateway_url,
+                provider=DEFAULT_PROVIDER,
+                model=DEFAULT_MODEL,
+                checklist=_checklist(status_row),
+                powershell_snippet=powershell,
+                curl_snippet=curl,
+            )
 
         if db.query(User).filter(User.email == signup_row.email, User.is_active == True).first():
             raise HTTPException(status_code=409, detail="An active user already exists for this email")

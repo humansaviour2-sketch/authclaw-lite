@@ -36,6 +36,24 @@ class UserCreate(BaseModel):
     role: str = Field(default="viewer", pattern="^(owner|admin|viewer)$")
 
 
+class UserInviteRequest(BaseModel):
+    """Invite a user into the current tenant with email OTP verification."""
+    email: EmailStr
+    role: str = Field(default="viewer", pattern="^(owner|admin|viewer)$")
+
+
+class UserInviteResponse(BaseModel):
+    """Tenant user invite response."""
+    signup_id: UUID
+    email: EmailStr
+    tenant_name: str
+    invited_role: str
+    expires_at: datetime
+    delivery: str
+    next_resend_at: datetime
+    dev_otp: Optional[str] = None
+
+
 class UserResponse(BaseModel):
     """Schema for user response"""
     id: UUID
@@ -63,6 +81,7 @@ class APIKeyResponse(BaseModel):
     scopes: List[str]
     is_active: bool
     created_at: datetime
+    last_used: Optional[datetime] = None
 
     class Config:
         from_attributes = True

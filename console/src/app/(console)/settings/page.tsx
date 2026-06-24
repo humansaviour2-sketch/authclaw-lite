@@ -34,6 +34,18 @@ interface APIKeyItem {
   scopes: string[];
   is_active: boolean;
   created_at: string;
+  last_used?: string | null;
+}
+
+interface InviteResult {
+  signup_id: string;
+  email: string;
+  tenant_name: string;
+  invited_role: string;
+  expires_at: string;
+  delivery: string;
+  next_resend_at: string;
+  dev_otp?: string;
 }
 
 export default function SettingsPage() {
@@ -44,6 +56,7 @@ export default function SettingsPage() {
   const [users, setUsers] = useState<UserItem[]>([]);
   const [apiKeys, setApiKeys] = useState<APIKeyItem[]>([]);
   const [tenantId, setTenantId] = useState("Unknown");
+  const [tenantStatus, setTenantStatus] = useState("active");
   const [sessionRole, setSessionRole] = useState("viewer");
   const [loading, setLoading] = useState(true);
 
@@ -53,6 +66,7 @@ export default function SettingsPage() {
   const [userRole, setUserRole] = useState("viewer");
   const [userError, setUserError] = useState<string | null>(null);
   const [userSubmitting, setUserSubmitting] = useState(false);
+  const [inviteResult, setInviteResult] = useState<InviteResult | null>(null);
 
   // Key Form Modal States
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
@@ -62,6 +76,7 @@ export default function SettingsPage() {
   const [keySubmitting, setKeySubmitting] = useState(false);
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [inviteCopied, setInviteCopied] = useState(false);
   const [tenantActionError, setTenantActionError] = useState<string | null>(null);
   const [tenantActionBusy, setTenantActionBusy] = useState(false);
   const isOwner = sessionRole === "owner";
@@ -95,6 +110,12 @@ export default function SettingsPage() {
       if (dashboardRes.status === 401) {
         window.location.href = "/login";
         return;
+      }
+
+      const tenantRes = await fetch("/api/tenants/current");
+      if (tenantRes.ok) {
+        const tenantData = await tenantRes.json();
+        setTenantStatus(tenantData.status || "active");
       }
     } catch (err: any) {
       console.warn("Settings fetchUsersAndKeys failed:", err.message);
@@ -132,24 +153,23 @@ export default function SettingsPage() {
     setUserError(null);
 
     try {
-      const res = await fetch("/api/users", {
+      const res = await fetch("/api/users/invite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: userEmail,
-          password: "temporary_password_123", // required by UserCreate schema
           role: userRole
         }),
       });
+      const data = await res.json();
 
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to create user");
+        throw new Error(data.error || "Failed to send invite");
       }
 
       setUserEmail("");
       setUserRole("viewer");
-      setIsUserModalOpen(false);
+      setInviteResult(data);
       await fetchUsersAndKeys();
     } catch (err: any) {
       setUserError(err.message || "An unexpected error occurred");
@@ -164,7 +184,7 @@ export default function SettingsPage() {
     try {
       const res = await fetch(`/api/users/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete user");
-      setUsers(users.filter((u) => u.id !== id));
+      setUsers(users.map((u) => u.id === id ? { ...u, is_active: false } : u));
     } catch (err: any) {
       alert(err.message || "Could not delete user");
     }
@@ -231,10 +251,23 @@ export default function SettingsPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleDisableTenant = async () => {
+  const inviteLink = inviteResult
+    ? `${typeof window !== "undefined" ? window.location.origin : ""}/signup?invite=${inviteResult.signup_id}`
+    : "";
+
+  const copyInviteLink = async () => {
+    if (!inviteLink) return;
+    await navigator.clipboard.writeText(inviteLink);
+    setInviteCopied(true);
+    setTimeout(() => setInviteCopied(false), 2000);
+  };
+
+  const handleTenantStatusChange = async (nextStatus: "active" | "disabled") => {
     if (!isOwner) return;
     const confirmed = confirm(
-      "Disable this tenant? New console and gateway requests for this tenant will be rejected until it is reactivated from the backend."
+      nextStatus === "disabled"
+        ? "Disable this tenant? Gateway requests and most console actions will be rejected until reactivated."
+        : "Reactivate this tenant?"
     );
     if (!confirmed) return;
     setTenantActionBusy(true);
@@ -243,17 +276,15 @@ export default function SettingsPage() {
       const res = await fetch("/api/tenants/current/status", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "disabled" }),
+        body: JSON.stringify({ status: nextStatus }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(data.error || "Failed to disable tenant");
       }
-      alert("Tenant disabled. You will be signed out.");
-      await fetch("/api/auth/logout", { method: "POST" });
-      window.location.href = "/login";
+      setTenantStatus(data.status || nextStatus);
     } catch (err: any) {
-      setTenantActionError(err.message || "Could not disable tenant");
+      setTenantActionError(err.message || "Could not update tenant status");
     } finally {
       setTenantActionBusy(false);
     }
@@ -315,7 +346,7 @@ export default function SettingsPage() {
               <p className="text-slate-500 mt-0.5">Manage permissions and view 2FA setup status.</p>
             </div>
             <button
-              onClick={() => { setUserEmail(""); setUserRole("viewer"); setUserError(null); setIsUserModalOpen(true); }}
+              onClick={() => { setUserEmail(""); setUserRole("viewer"); setUserError(null); setInviteResult(null); setIsUserModalOpen(true); }}
               disabled={!isOwner}
               className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-650 hover:bg-indigo-600 text-white font-semibold text-xs transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -337,30 +368,35 @@ export default function SettingsPage() {
                   <tr className="border-b border-slate-800 bg-[#07070a]/40 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
                     <th className="px-6 py-4">Email</th>
                     <th className="px-6 py-4">Role</th>
-                    <th className="px-6 py-4">MFA Status</th>
+                    <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4">Joined At</th>
                     <th className="px-6 py-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/50">
                   {users.map((u) => (
-                    <tr key={u.id} className="hover:bg-slate-800/10 transition-colors">
-                      <td className="px-6 py-4 font-semibold text-slate-200">{u.email}</td>
+                    <tr key={u.id} className={`hover:bg-slate-800/10 transition-colors ${!u.is_active ? "opacity-55" : ""}`}>
+                      <td className="px-6 py-4">
+                        <div className="font-semibold text-slate-200">{u.email}</div>
+                        <div className="mt-1 text-[10px] text-slate-600">
+                          MFA {u.mfa_enabled ? "enabled" : "disabled"}
+                        </div>
+                      </td>
                       <td className="px-6 py-4">
                         <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-350 capitalize border border-slate-700/60 font-semibold text-[10px]">
                           {u.role}
                         </span>
                       </td>
                       <td className="px-6 py-4">
-                        {u.mfa_enabled ? (
+                        {u.is_active ? (
                           <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-450">
                             <Lock className="w-3.5 h-3.5 text-emerald-500" />
-                            Enabled
+                            Active
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-500">
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-300">
                             <Unlock className="w-3.5 h-3.5 text-slate-600" />
-                            Disabled
+                            Inactive
                           </span>
                         )}
                       </td>
@@ -368,7 +404,7 @@ export default function SettingsPage() {
                         {new Date(u.created_at).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4 text-right">
-                        {isOwner ? (
+                        {isOwner && u.is_active ? (
                           <button
                             onClick={() => handleDeleteUser(u.id)}
                             className="p-1.5 rounded bg-red-950/20 hover:bg-red-950/80 text-red-400 border border-red-900/30 hover:border-red-800 transition"
@@ -423,6 +459,7 @@ export default function SettingsPage() {
                     <th className="px-6 py-4">Scopes</th>
                     <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4">Created At</th>
+                    <th className="px-6 py-4">Last Used</th>
                     <th className="px-6 py-4 text-right">Actions</th>
                   </tr>
                 </thead>
@@ -449,6 +486,9 @@ export default function SettingsPage() {
                       </td>
                       <td className="px-6 py-4 text-slate-500 font-mono">
                         {new Date(k.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-6 py-4 text-slate-500 font-mono">
+                        {k.last_used ? new Date(k.last_used).toLocaleString() : "Never"}
                       </td>
                       <td className="px-6 py-4 text-right">
                         <button
@@ -504,6 +544,14 @@ export default function SettingsPage() {
                 <span className="inline-block px-2.5 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 font-semibold text-[10px] mt-1 uppercase">
                   Enterprise Sandbox
                 </span>
+                <p className="mt-3 text-slate-500 text-[10px] font-bold uppercase tracking-wider">Tenant Status</p>
+                <span className={`inline-block px-2.5 py-0.5 rounded font-semibold text-[10px] mt-1 uppercase ${
+                  tenantStatus === "active"
+                    ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-400"
+                    : "bg-red-500/10 border border-red-500/20 text-red-300"
+                }`}>
+                  {tenantStatus}
+                </span>
               </div>
             </div>
           </div>
@@ -515,19 +563,19 @@ export default function SettingsPage() {
                   <div>
                     <h4 className="text-sm font-bold text-red-200 flex items-center gap-2">
                       <ShieldAlert className="w-4 h-4" />
-                      Disable Tenant
+                      Tenant Lifecycle
                     </h4>
                     <p className="text-xs text-red-200/70 mt-1">
-                      Suspends console and gateway access for this tenant without deleting audit evidence.
+                      Disable suspends most access without deleting audit evidence. Reactivate restores normal use.
                     </p>
                     {tenantActionError && <p className="text-xs text-red-300 mt-2">{tenantActionError}</p>}
                   </div>
                   <button
-                    onClick={handleDisableTenant}
+                    onClick={() => handleTenantStatusChange(tenantStatus === "active" ? "disabled" : "active")}
                     disabled={tenantActionBusy}
                     className="shrink-0 rounded-lg border border-red-800 bg-red-950/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-900/40 disabled:opacity-50"
                   >
-                    {tenantActionBusy ? "Disabling..." : "Disable"}
+                    {tenantActionBusy ? "Updating..." : tenantStatus === "active" ? "Disable" : "Reactivate"}
                   </button>
                 </div>
               </div>
@@ -545,8 +593,8 @@ export default function SettingsPage() {
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 rounded-full bg-indigo-500/5 blur-[80px] pointer-events-none" />
             
             <div className="flex justify-between items-center mb-6 border-b border-slate-800/80 pb-3">
-              <h3 className="text-sm font-bold text-white">Add Tenant Member</h3>
-              <button onClick={() => setIsUserModalOpen(false)} className="text-slate-400 hover:text-white transition">
+              <h3 className="text-sm font-bold text-white">Invite Tenant Member</h3>
+              <button onClick={() => { setInviteResult(null); setIsUserModalOpen(false); }} className="text-slate-400 hover:text-white transition">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -557,6 +605,41 @@ export default function SettingsPage() {
               </div>
             )}
 
+            {inviteResult ? (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-xs text-emerald-100">
+                  Invite sent to <span className="font-semibold">{inviteResult.email}</span> as{" "}
+                  <span className="font-semibold capitalize">{inviteResult.invited_role}</span>.
+                  {inviteResult.dev_otp && (
+                    <div className="mt-2 font-mono text-emerald-200">Demo OTP: {inviteResult.dev_otp}</div>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                    Invite Verification Link
+                  </label>
+                  <div className="flex gap-2 rounded-lg border border-slate-800 bg-[#07070a] p-2">
+                    <span className="flex-1 truncate font-mono text-xs text-slate-300">{inviteLink}</span>
+                    <button
+                      type="button"
+                      onClick={copyInviteLink}
+                      className="rounded bg-slate-850 px-2 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                    >
+                      {inviteCopied ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => { setInviteResult(null); setIsUserModalOpen(false); }}
+                    className="px-4 py-2 rounded-lg bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-200 font-semibold text-xs transition"
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            ) : (
             <form onSubmit={handleAddUser} className="space-y-4">
               <div>
                 <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
@@ -605,10 +688,11 @@ export default function SettingsPage() {
                   disabled={userSubmitting}
                   className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg transition active:scale-[0.98] disabled:opacity-50"
                 >
-                  {userSubmitting ? "Adding..." : "Add Member"}
+                  {userSubmitting ? "Sending..." : "Send Invite"}
                 </button>
               </div>
             </form>
+            )}
           </div>
         </div>
       )}
