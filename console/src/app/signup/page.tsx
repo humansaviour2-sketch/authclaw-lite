@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -38,8 +38,11 @@ interface VerifyResponse {
   curl_snippet: string;
 }
 
-export default function SignupPage() {
+function SignupPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const inviteId = searchParams.get("invite");
+  const isInviteMode = Boolean(inviteId);
   const [tenantName, setTenantName] = useState("");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
@@ -53,9 +56,10 @@ export default function SignupPage() {
 
   const step = useMemo(() => {
     if (verified) return 3;
+    if (isInviteMode) return 2;
     if (signup) return 2;
     return 1;
-  }, [signup, verified]);
+  }, [isInviteMode, signup, verified]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -97,22 +101,28 @@ export default function SignupPage() {
 
   const verifyOtp = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!signup) return;
+    const signupId = signup?.signup_id || inviteId;
+    if (!signupId) return;
     setLoading(true);
     setError(null);
     try {
       const response = await fetch("/api/onboarding/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ signup_id: signup.signup_id, otp }),
+        body: JSON.stringify({ signup_id: signupId, otp }),
       });
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.detail || data.message || "Could not verify code");
       }
       setVerified(data);
-      window.sessionStorage.setItem("authclaw_onboarding_result", JSON.stringify(data));
-      router.push("/connect?onboarding=1");
+      if (isInviteMode) {
+        window.sessionStorage.removeItem("authclaw_onboarding_result");
+        router.push("/overview");
+      } else {
+        window.sessionStorage.setItem("authclaw_onboarding_result", JSON.stringify(data));
+        router.push("/connect?onboarding=1");
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not verify code");
     } finally {
@@ -174,9 +184,9 @@ export default function SignupPage() {
         <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
           <aside className="rounded-lg border border-slate-800 bg-[#0e0e15] p-5">
             {[
-              ["Email OTP", "Verify account ownership"],
-              ["Tenant Setup", "Create tenant, route, key, policy"],
-              ["Connect Provider", "Save upstream Gemini/OpenAI key"],
+              ["Email OTP", isInviteMode ? "Verify tenant invite" : "Verify account ownership"],
+              ["Tenant Setup", isInviteMode ? "Join existing tenant" : "Create tenant, route, key, policy"],
+              ["Connect Provider", isInviteMode ? "Open tenant console" : "Save upstream Gemini/OpenAI key"],
             ].map(([title, subtitle], index) => {
               const active = step === index + 1;
               const complete = step > index + 1;
@@ -210,7 +220,7 @@ export default function SignupPage() {
               </div>
             )}
 
-            {!signup && (
+            {!signup && !isInviteMode && (
               <form onSubmit={requestOtp} className="space-y-5">
                 <div>
                   <h2 className="text-lg font-bold text-white">Create Tenant</h2>
@@ -258,22 +268,26 @@ export default function SignupPage() {
               </form>
             )}
 
-            {signup && !verified && (
+            {(signup || isInviteMode) && !verified && (
               <form onSubmit={verifyOtp} className="space-y-5">
                 <div>
-                  <h2 className="text-lg font-bold text-white">Verify Email</h2>
-                  <p className="mt-1 text-sm text-slate-500">Enter the 6-digit code sent to {signup.email}.</p>
+                  <h2 className="text-lg font-bold text-white">{isInviteMode ? "Verify Tenant Invite" : "Verify Email"}</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {isInviteMode ? "Enter the 6-digit code sent to your email." : `Enter the 6-digit code sent to ${signup?.email}.`}
+                  </p>
                 </div>
 
-                {signup.dev_otp && (
+                {signup?.dev_otp && (
                   <div className="rounded-lg border border-amber-400/25 bg-amber-400/10 p-3 text-sm text-amber-100">
                     Demo OTP: <span className="font-mono font-bold">{signup.dev_otp}</span>
                   </div>
                 )}
 
-                {!signup.dev_otp && (
+                {!signup?.dev_otp && (
                   <div className="rounded-lg border border-slate-800 bg-[#07070a] p-3 text-xs text-slate-400">
-                    Code sent by {signup.delivery === "smtp" ? "email" : signup.delivery}. Check your inbox and spam folder.
+                    {isInviteMode
+                      ? "Check your inbox and spam folder for the tenant invite code."
+                      : `Code sent by ${signup?.delivery === "smtp" ? "email" : signup?.delivery}. Check your inbox and spam folder.`}
                   </div>
                 )}
 
@@ -296,10 +310,11 @@ export default function SignupPage() {
                   disabled={loading || otp.length !== 6}
                   className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-60"
                 >
-                  {loading ? "Creating tenant..." : "Verify and Create Tenant"}
+                  {loading ? (isInviteMode ? "Joining tenant..." : "Creating tenant...") : (isInviteMode ? "Verify and Join Tenant" : "Verify and Create Tenant")}
                   <ShieldCheck className="h-4 w-4" />
                 </button>
 
+                {signup && (
                 <div className="flex flex-col gap-2 border-t border-slate-800 pt-4 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-xs text-slate-500">
                     Code expires {new Date(signup.expires_at).toLocaleTimeString()}.
@@ -317,6 +332,7 @@ export default function SignupPage() {
                         : "Resend Code"}
                   </button>
                 </div>
+                )}
               </form>
             )}
 
@@ -379,5 +395,13 @@ export default function SignupPage() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function SignupPage() {
+  return (
+    <Suspense fallback={<main className="min-h-screen bg-[#07070a] text-slate-100" />}>
+      <SignupPageContent />
+    </Suspense>
   );
 }

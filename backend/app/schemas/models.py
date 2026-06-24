@@ -24,11 +24,34 @@ class TenantResponse(BaseModel):
         from_attributes = True
 
 
+class TenantStatusUpdate(BaseModel):
+    """Schema for changing the active tenant lifecycle state."""
+    status: str = Field(..., pattern="^(active|disabled|suspended)$")
+
+
 class UserCreate(BaseModel):
     """Schema for creating a user"""
     email: EmailStr
     password: str = Field(..., min_length=8)
-    role: str = Field(default="viewer", pattern="^(owner|admin|developer|operator|viewer)$")
+    role: str = Field(default="viewer", pattern="^(owner|admin|viewer)$")
+
+
+class UserInviteRequest(BaseModel):
+    """Invite a user into the current tenant with email OTP verification."""
+    email: EmailStr
+    role: str = Field(default="viewer", pattern="^(owner|admin|viewer)$")
+
+
+class UserInviteResponse(BaseModel):
+    """Tenant user invite response."""
+    signup_id: UUID
+    email: EmailStr
+    tenant_name: str
+    invited_role: str
+    expires_at: datetime
+    delivery: str
+    next_resend_at: datetime
+    dev_otp: Optional[str] = None
 
 
 class UserResponse(BaseModel):
@@ -58,6 +81,7 @@ class APIKeyResponse(BaseModel):
     scopes: List[str]
     is_active: bool
     created_at: datetime
+    last_used: Optional[datetime] = None
 
     class Config:
         from_attributes = True

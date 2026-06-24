@@ -23,22 +23,25 @@ interface ConsoleShellProps {
   userEmail: string;
   tenantId: string;
   tenantName: string;
+  userRole: string;
 }
 
 const navigation = [
-  { name: "Overview", href: "/overview", icon: LayoutDashboard },
-  { name: "Connect App", href: "/connect", icon: Cable },
-  { name: "Gateway", href: "/gateway", icon: Cpu },
-  { name: "Policies", href: "/policies", icon: ShieldAlert },
-  { name: "Audit", href: "/audit", icon: ScrollText },
-  { name: "Settings", href: "/settings", icon: Settings },
+  { name: "Overview", href: "/overview", icon: LayoutDashboard, roles: ["owner", "admin", "viewer"] },
+  { name: "Connect App", href: "/connect", icon: Cable, roles: ["owner", "admin"] },
+  { name: "Gateway", href: "/gateway", icon: Cpu, roles: ["owner", "admin"] },
+  { name: "Policies", href: "/policies", icon: ShieldAlert, roles: ["owner", "admin"] },
+  { name: "Audit", href: "/audit", icon: ScrollText, roles: ["owner", "admin", "viewer"] },
+  { name: "Settings", href: "/settings", icon: Settings, roles: ["owner", "admin"] },
 ];
 
-export default function ConsoleShell({ children, userEmail, tenantId, tenantName }: ConsoleShellProps) {
+export default function ConsoleShell({ children, userEmail, tenantId, tenantName, userRole }: ConsoleShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
+  const normalizedRole = userRole?.toLowerCase() || "viewer";
+  const allowedNavigation = navigation.filter((item) => item.roles.includes(normalizedRole));
 
   const handleLogout = async () => {
     try {
@@ -54,7 +57,7 @@ export default function ConsoleShell({ children, userEmail, tenantId, tenantName
 
   const navLinks = (onClick?: () => void) => (
     <>
-      {navigation.map((item) => {
+      {allowedNavigation.map((item) => {
         const active = pathname === item.href;
         return (
           <Link
@@ -186,6 +189,7 @@ export default function ConsoleShell({ children, userEmail, tenantId, tenantName
                     <div className="px-4 py-2 border-b border-slate-800/60">
                       <p className="text-[10px] font-semibold uppercase text-slate-500 tracking-wider">Signed In As</p>
                       <p className="text-xs text-slate-300 truncate font-medium mt-0.5">{userEmail}</p>
+                      <p className="text-[10px] text-slate-500 capitalize mt-0.5">{normalizedRole}</p>
                     </div>
                     <button
                       onClick={handleLogout}

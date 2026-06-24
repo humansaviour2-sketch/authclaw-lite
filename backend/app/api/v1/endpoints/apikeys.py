@@ -10,7 +10,7 @@ from datetime import datetime
 
 from app.db.models import APIKey
 from app.schemas.models import APIKeyCreate, APIKeyResponse
-from app.core.auth import get_tenant_db, require_scopes
+from app.core.auth import get_tenant_db, require_roles
 
 router = APIRouter()
 
@@ -24,14 +24,14 @@ class APIKeyCreateResponse(BaseModel):
     api_key: str
 
 
-@router.get("", response_model=list[APIKeyResponse], dependencies=[require_scopes(["read"])])
+@router.get("", response_model=list[APIKeyResponse], dependencies=[require_roles(["owner"])])
 def list_api_keys(request: Request, db: Session = Depends(get_tenant_db)):
     """List all API keys for the tenant (isolated by tenant RLS)"""
     tenant_id = request.state.tenant_id
     return db.query(APIKey).filter(APIKey.tenant_id == tenant_id, APIKey.is_active == True).all()
 
 
-@router.post("", response_model=APIKeyCreateResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_scopes(["write"])])
+@router.post("", response_model=APIKeyCreateResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_roles(["owner"])])
 def generate_api_key(
     request: Request,
     key_in: APIKeyCreate,
@@ -75,7 +75,7 @@ def generate_api_key(
         )
 
 
-@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_scopes(["write"])])
+@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_roles(["owner"])])
 def revoke_api_key(
     id: UUID,
     request: Request,
@@ -89,7 +89,5 @@ def revoke_api_key(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="API Key not found"
         )
-    # Perform a soft delete by setting active to False, or hard delete?
-    # Let's do a hard delete to match the delete pattern of other endpoints.
-    db.delete(key)
+    key.is_active = False
     db.commit()

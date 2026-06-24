@@ -23,6 +23,7 @@ export async function POST(request: Request) {
       userId: data.user_id,
       tenantId: data.tenant_id,
       scopes: ["admin", "read", "write"],
+      role: data.role || "owner",
     });
 
     const cookiePayload = {
@@ -31,6 +32,7 @@ export async function POST(request: Request) {
       tenantId: data.tenant_id,
       tenantName: data.tenant_name,
       scopes: ["admin", "read", "write"],
+      role: data.role || "owner",
       email: data.email,
     };
 

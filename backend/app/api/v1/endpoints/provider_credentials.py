@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_tenant_db, require_scopes
+from app.core.auth import get_tenant_db, require_roles, require_scopes
 from app.core.crypto import encrypt_deterministic
 from app.db.models import OnboardingStatus, ProviderCredential
 from app.schemas.models import ProviderCredentialCreate, ProviderCredentialResponse
@@ -21,7 +21,7 @@ def list_provider_credentials(request: Request, db: Session = Depends(get_tenant
     ).order_by(ProviderCredential.created_at.desc()).all()
 
 
-@router.post("", response_model=ProviderCredentialResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_scopes(["write"])])
+@router.post("", response_model=ProviderCredentialResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_roles(["owner", "admin"])])
 def create_provider_credential(
     request: Request,
     credential_in: ProviderCredentialCreate,
@@ -61,7 +61,7 @@ def create_provider_credential(
     return credential
 
 
-@router.post("/{credential_id}/rotate", response_model=ProviderCredentialResponse, dependencies=[require_scopes(["write"])])
+@router.post("/{credential_id}/rotate", response_model=ProviderCredentialResponse, dependencies=[require_roles(["owner", "admin"])])
 def rotate_provider_credential(
     credential_id: UUID,
     credential_in: ProviderCredentialCreate,
@@ -90,7 +90,7 @@ def rotate_provider_credential(
     return credential
 
 
-@router.delete("/{credential_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_scopes(["write"])])
+@router.delete("/{credential_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_roles(["owner", "admin"])])
 def revoke_provider_credential(
     credential_id: UUID,
     request: Request,

@@ -8,7 +8,7 @@ import redis
 
 from app.db.models import Policy
 from app.schemas.models import PolicyCreate, PolicyResponse, PolicyDetailResponse
-from app.core.auth import get_tenant_db, require_scopes
+from app.core.auth import get_tenant_db, require_roles, require_scopes
 
 router = APIRouter()
 
@@ -72,7 +72,7 @@ def validate_policy_yaml(yaml_str: str):
                 )
 
 
-@router.post("", response_model=PolicyResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_scopes(["write"])])
+@router.post("", response_model=PolicyResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_roles(["owner", "admin"])])
 def upload_policy(
     request: Request,
     policy_in: PolicyCreate,

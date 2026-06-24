@@ -4,6 +4,16 @@ import { sessionStore } from "./session-store";
 
 const BACKEND_URL = process.env.API_URL || "http://localhost:8000";
 
+class BackendRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "BackendRequestError";
+    this.status = status;
+  }
+}
+
 interface RequestOptions extends RequestInit {
   params?: Record<string, string>;
 }
@@ -56,7 +66,7 @@ export async function backendFetch(path: string, options: RequestOptions = {}) {
     } catch {
       // ignore JSON parse error
     }
-    throw new Error(errorDetail);
+    throw new BackendRequestError(errorDetail, response.status);
   }
 
   if (response.status === 204) {
@@ -68,7 +78,7 @@ export async function backendFetch(path: string, options: RequestOptions = {}) {
 
 export function handleApiError(error: any) {
   const isUnauthorized = error.message?.includes("Unauthorized");
-  const status = isUnauthorized ? 401 : 500;
+  const status = error.status || (isUnauthorized ? 401 : 500);
   const response = NextResponse.json({ error: error.message }, { status });
   if (isUnauthorized) {
     response.cookies.delete("authclaw_session");

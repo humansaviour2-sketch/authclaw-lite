@@ -1,12 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 import uuid
 
 from app.db.dependencies import get_db
 from app.db.models import Tenant
-from app.schemas.models import TenantCreate, TenantResponse
-from app.core.auth import require_scopes
+from app.schemas.models import TenantCreate, TenantResponse, TenantStatusUpdate
+from app.core.auth import get_tenant_db, require_roles, require_scopes
 
 router = APIRouter()
 
@@ -47,3 +47,30 @@ def create_tenant(tenant_in: TenantCreate, db: Session = Depends(get_db)):
         )
     finally:
         db.execute(text("SELECT set_config('app.current_tenant_id', '', false)"))
+
+
+@router.get("/current", response_model=TenantResponse, dependencies=[require_roles(["owner", "admin", "viewer"])])
+def get_current_tenant(request: Request, db: Session = Depends(get_tenant_db)):
+    """Return the active tenant profile."""
+    tenant_id = request.state.tenant_id
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    return tenant
+
+
+@router.patch("/current/status", response_model=TenantResponse, dependencies=[require_roles(["owner"])])
+def update_current_tenant_status(
+    status_in: TenantStatusUpdate,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+):
+    """Owner-only tenant lifecycle control. Disabled tenants cannot authenticate new requests."""
+    tenant_id = request.state.tenant_id
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    tenant.status = status_in.status
+    db.commit()
+    db.refresh(tenant)
+    return tenant
