@@ -18,6 +18,7 @@ import {
   Mail,
   ShieldAlert
 } from "lucide-react";
+import { copyTextToClipboard } from "@/lib/clipboard";
 
 interface UserItem {
   id: string;
@@ -244,9 +245,9 @@ export default function SettingsPage() {
     }
   };
 
-  const copyToClipboard = () => {
+  const copyToClipboard = async () => {
     if (!generatedKey) return;
-    navigator.clipboard.writeText(generatedKey);
+    await copyTextToClipboard(generatedKey);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -257,7 +258,7 @@ export default function SettingsPage() {
 
   const copyInviteLink = async () => {
     if (!inviteLink) return;
-    await navigator.clipboard.writeText(inviteLink);
+    await copyTextToClipboard(inviteLink);
     setInviteCopied(true);
     setTimeout(() => setInviteCopied(false), 2000);
   };
@@ -619,7 +620,12 @@ export default function SettingsPage() {
                     Invite Verification Link
                   </label>
                   <div className="flex gap-2 rounded-lg border border-slate-800 bg-[#07070a] p-2">
-                    <span className="flex-1 truncate font-mono text-xs text-slate-300">{inviteLink}</span>
+                    <input
+                      readOnly
+                      value={inviteLink}
+                      onFocus={(event) => event.currentTarget.select()}
+                      className="min-w-0 flex-1 bg-transparent font-mono text-xs text-slate-300 outline-none"
+                    />
                     <button
                       type="button"
                       onClick={copyInviteLink}

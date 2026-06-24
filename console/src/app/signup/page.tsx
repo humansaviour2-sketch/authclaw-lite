@@ -13,6 +13,7 @@ import {
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
+import { copyTextToClipboard } from "@/lib/clipboard";
 
 interface SignupResponse {
   signup_id: string;
@@ -56,6 +57,13 @@ function apiErrorMessage(data: unknown, fallback: string): string {
       .join(" ");
   }
   return fallback;
+}
+
+function isUuid(value: string | null): value is string {
+  return Boolean(
+    value &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  );
 }
 
 function SignupPageContent() {
@@ -123,6 +131,10 @@ function SignupPageContent() {
     event.preventDefault();
     const signupId = signup?.signup_id || inviteId;
     if (!signupId) return;
+    if (isInviteMode && !isUuid(inviteId)) {
+      setError("Invite link is incomplete or invalid. Ask the owner to copy the full invite link again.");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -178,7 +190,7 @@ function SignupPageContent() {
   };
 
   const copyText = async (label: string, value: string) => {
-    await navigator.clipboard.writeText(value);
+    await copyTextToClipboard(value);
     setCopied(label);
     window.setTimeout(() => setCopied(null), 1600);
   };
