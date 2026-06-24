@@ -38,6 +38,26 @@ interface VerifyResponse {
   curl_snippet: string;
 }
 
+function apiErrorMessage(data: unknown, fallback: string): string {
+  if (!data || typeof data !== "object") return fallback;
+  const payload = data as { detail?: unknown; message?: unknown; error?: unknown };
+  const candidate = payload.detail ?? payload.message ?? payload.error;
+  if (typeof candidate === "string") return candidate;
+  if (Array.isArray(candidate)) {
+    return candidate
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object" && "msg" in item) {
+          return String((item as { msg: unknown }).msg);
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join(" ");
+  }
+  return fallback;
+}
+
 function SignupPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -84,7 +104,7 @@ function SignupPageContent() {
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.detail || data.message || "Could not start signup");
+        throw new Error(apiErrorMessage(data, "Could not start signup"));
       }
       setSignup(data);
       if (data.dev_otp) {
@@ -113,7 +133,7 @@ function SignupPageContent() {
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.detail || data.message || "Could not verify code");
+        throw new Error(apiErrorMessage(data, "Could not verify code"));
       }
       setVerified(data);
       if (isInviteMode) {
@@ -142,7 +162,7 @@ function SignupPageContent() {
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.detail || data.message || "Could not resend code");
+        throw new Error(apiErrorMessage(data, "Could not resend code"));
       }
       setSignup((current) => current ? { ...current, ...data } : current);
       if (data.dev_otp) {

@@ -414,14 +414,24 @@ def verify(payload: OnboardingVerifyRequest, request: Request):
 
             db.execute(text("SELECT set_config('app.current_tenant_id', :tenant_id, false)"), {"tenant_id": str(tenant.id)})
             invited_role = signup_row.invited_role or "viewer"
-            user = User(
-                tenant_id=tenant.id,
-                email=signup_row.email,
-                role=invited_role,
-                mfa_enabled=False,
-                is_active=True,
-            )
-            db.add(user)
+            user = db.query(User).filter(
+                User.tenant_id == tenant.id,
+                User.email == signup_row.email,
+                User.is_active == False,
+            ).first()
+            if user:
+                user.role = invited_role
+                user.is_active = True
+                user.mfa_enabled = False
+            else:
+                user = User(
+                    tenant_id=tenant.id,
+                    email=signup_row.email,
+                    role=invited_role,
+                    mfa_enabled=False,
+                    is_active=True,
+                )
+                db.add(user)
             db.flush()
 
             raw_api_key = _generate_gateway_key()
