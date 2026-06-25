@@ -72,6 +72,7 @@ interface MFASetupState extends SecurityState {
   mfa_secret: string;
   provisioning_uri: string;
   backup_codes: string[];
+  qr_code_base64: string;
 }
 
 interface UsageLimitState {
@@ -670,31 +671,30 @@ export default function SettingsPage() {
 
             {mfaSetup && (
               <div className="mt-6 grid gap-4 md:grid-cols-2">
-                <div className="rounded-xl border border-slate-800 bg-[#07070a] p-4">
-                  <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Authenticator Secret</div>
+                <div className="rounded-xl border border-slate-800 bg-[#07070a] p-4 flex flex-col items-center justify-center">
+                  <div className="mb-3 text-[10px] font-bold uppercase tracking-wider text-slate-500 w-full text-left">Scan with Authenticator App</div>
+                  <img 
+                    src={`data:image/png;base64,${mfaSetup.qr_code_base64}`} 
+                    alt="MFA QR Code" 
+                    className="w-32 h-32 rounded bg-white p-1"
+                  />
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-[#07070a] p-4 flex flex-col justify-center">
+                  <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Authenticator Secret (Manual Entry)</div>
                   <div className="select-all break-all font-mono text-xs text-slate-200">{mfaSetup.mfa_secret}</div>
                   <div className="mt-3 text-[10px] text-slate-500">
                     Add this secret to Google Authenticator, 1Password, Authy, or any TOTP app.
                   </div>
                 </div>
-                <div className="rounded-xl border border-slate-800 bg-[#07070a] p-4">
+                <div className="rounded-xl border border-slate-800 bg-[#07070a] p-4 md:col-span-2">
                   <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Backup Codes</div>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
                     {mfaSetup.backup_codes.map((code) => (
-                      <span key={code} className="rounded border border-slate-800 bg-slate-950 px-2 py-1 font-mono text-xs text-slate-200">
+                      <span key={code} className="rounded border border-slate-800 bg-slate-950 px-2 py-1 font-mono text-xs text-slate-200 text-center">
                         {code}
                       </span>
                     ))}
                   </div>
-                </div>
-                <div className="md:col-span-2 rounded-xl border border-slate-800 bg-[#07070a] p-4">
-                  <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Provisioning URI</div>
-                  <input
-                    readOnly
-                    value={mfaSetup.provisioning_uri}
-                    onFocus={(event) => event.currentTarget.select()}
-                    className="w-full rounded border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-300 outline-none"
-                  />
                 </div>
               </div>
             )}

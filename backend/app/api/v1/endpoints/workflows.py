@@ -181,6 +181,54 @@ def _auto_expire_stale(db: Session, tenant_id: str, actor_id: uuid.UUID) -> None
         db.commit()
 
 
+def _verify_mfa_if_enabled(
+    user: User,
+    request: Request,
+    body: Optional["ApprovalRequest"],
+) -> tuple[bool, Optional[datetime]]:
+    """Shared MFA verification for all HITL approval endpoints.
+
+    Returns (mfa_verified, mfa_timestamp).
+    Raises HTTPException if the user has MFA enabled but the supplied code is
+    missing or invalid.  Users who have NOT set up MFA are allowed through
+    (mfa_verified=False) so that the feature does not break for tenants that
+    have not yet configured TOTP.
+    """
+    if not (user.mfa_enabled and user.mfa_secret):
+        # MFA not configured for this user — allow through without verification
+        return False, None
+
+    # Collect TOTP code from body → query param → header (in that priority order)
+    totp_code: Optional[str] = None
+    if body:
+        totp_code = body.totp_code
+    if not totp_code:
+        totp_code = request.query_params.get("totp_code")
+    if not totp_code:
+        totp_code = request.headers.get("X-MFA-Code") or request.headers.get("X-TOTP-Code")
+
+    if not totp_code:
+        raise HTTPException(
+            status_code=400,
+            detail="MFA token required: your account has MFA enabled",
+        )
+
+    totp = pyotp.TOTP(user.mfa_secret)
+    if totp.verify(totp_code, valid_window=1):
+        return True, datetime.now(timezone.utc)
+
+    # Check backup codes
+    backup_codes = user.mfa_backup_codes or []
+    if totp_code in backup_codes:
+        user.mfa_backup_codes = [c for c in backup_codes if c != totp_code]
+        return True, datetime.now(timezone.utc)
+
+    raise HTTPException(
+        status_code=400,
+        detail="Invalid MFA token or backup code",
+    )
+
+
 @router.post("/mfa/setup", status_code=200)
 def mfa_setup(
     request: Request,
@@ -255,10 +303,11 @@ def list_gateway_approvals(
 def approve_gateway_approval(
     approval_id: str,
     request: Request,
+    body: Optional[ApprovalRequest] = None,
     db: Session = Depends(get_tenant_db),
     _auth=require_scopes(["admin"]),
 ):
-    """Approve a gateway HITL approval so the waiting request may continue."""
+    """Approve a gateway HITL approval so the waiting request may continue (MFA challenged)."""
     tenant_id = str(request.state.tenant_id)
     user_id = request.state.user_id
     _auto_expire_stale(db, tenant_id, user_id)
@@ -273,10 +322,33 @@ def approve_gateway_approval(
     if approval.status != "PENDING":
         raise HTTPException(status_code=400, detail=f"Approval already resolved: {approval.status}")
 
+    # Verify MFA for the approving user (enforced when MFA is enabled on their account)
+    user = db.query(User).filter(
+        User.id == user_id,
+        User.tenant_id == uuid.UUID(tenant_id),
+    ).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Approver user record not found")
+    mfa_verified, mfa_timestamp = _verify_mfa_if_enabled(user, request, body)
+
     approval.status = "APPROVED"
     approval.approver_id = user_id
     approval.approved_at = datetime.now(timezone.utc)
     approval.updated_at = datetime.now(timezone.utc)
+    approval.mfa_verified = mfa_verified
+    approval.mfa_timestamp = mfa_timestamp
+
+    # Write immutable audit entry (was previously missing for gateway approvals)
+    audit = ApprovalAudit(
+        id=uuid.uuid4(),
+        tenant_id=uuid.UUID(tenant_id),
+        approval_id=approval.id,
+        actor_id=user_id,
+        action="APPROVED",
+        mfa_verified=mfa_verified,
+        mfa_timestamp=mfa_timestamp,
+    )
+    db.add(audit)
     db.commit()
     db.refresh(approval)
     return _approval_response(approval)
@@ -376,50 +448,22 @@ def approve_workflow(
             detail=f"Approval request is already resolved (status={approval.status})",
         )
 
-    # Validate MFA if enabled on user
-    user = db.query(User).filter(User.id == user_id).first()
+    # Validate MFA if enabled on user (uses shared helper)
+    user = db.query(User).filter(
+        User.id == user_id,
+        User.tenant_id == uuid.UUID(tenant_id),
+    ).first()
     if not user:
         raise HTTPException(status_code=404, detail="Approver user record not found")
 
-    mfa_verified = False
-    if user.mfa_enabled and user.mfa_secret:
-        totp_code = None
-        if body:
-            totp_code = body.totp_code
-        if not totp_code:
-            totp_code = request.query_params.get("totp_code")
-        if not totp_code:
-            totp_code = request.headers.get("X-MFA-Code") or request.headers.get("X-TOTP-Code")
-
-        if not totp_code:
-            raise HTTPException(
-                status_code=400,
-                detail="MFA token required: user has MFA enabled"
-            )
-
-        totp = pyotp.TOTP(user.mfa_secret)
-        if totp.verify(totp_code, valid_window=1):
-            mfa_verified = True
-        else:
-            # Check backup codes
-            backup_codes = user.mfa_backup_codes or []
-            if totp_code in backup_codes:
-                mfa_verified = True
-                new_codes = [c for c in backup_codes if c != totp_code]
-                user.mfa_backup_codes = new_codes
-                db.commit()
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid MFA token or backup code"
-                )
+    mfa_verified, mfa_timestamp = _verify_mfa_if_enabled(user, request, body)
 
     # Update PendingApproval (non-transferable, bound to current user)
     approval.status = "APPROVED"
     approval.approver_id = user_id
     approval.approved_at = datetime.now(timezone.utc)
     approval.mfa_verified = mfa_verified
-    approval.mfa_timestamp = datetime.now(timezone.utc) if mfa_verified else None
+    approval.mfa_timestamp = mfa_timestamp
 
     # Sync workflow status
     wf = db.query(ComplianceWorkflow).filter(
@@ -436,7 +480,7 @@ def approve_workflow(
         actor_id=user_id,
         action="APPROVED",
         mfa_verified=mfa_verified,
-        mfa_timestamp=datetime.now(timezone.utc) if mfa_verified else None,
+        mfa_timestamp=mfa_timestamp,
     )
     db.add(audit)
     db.commit()

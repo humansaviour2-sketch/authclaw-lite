@@ -4,6 +4,9 @@ from uuid import UUID
 from datetime import datetime, timedelta, timezone
 import os
 import pyotp
+import qrcode
+import io
+import base64
 from pydantic import BaseModel
 
 from app.db.models import OnboardingEmailOTP, Tenant, User
@@ -44,6 +47,7 @@ class MFASetupResponse(MFASecurityResponse):
     mfa_secret: str
     provisioning_uri: str
     backup_codes: list[str]
+    qr_code_base64: str
 
 
 @router.get("", response_model=list[UserResponse], dependencies=[require_roles(["owner", "admin"])])
@@ -56,7 +60,10 @@ def list_users(request: Request, db: Session = Depends(get_tenant_db)):
 @router.get("/me/security", response_model=MFASecurityResponse)
 def get_my_security(request: Request, db: Session = Depends(get_tenant_db)):
     """Return security posture for the current console principal."""
-    user = db.query(User).filter(User.id == request.state.user_id).first()
+    user = db.query(User).filter(
+        User.id == request.state.user_id,
+        User.tenant_id == request.state.tenant_id,
+    ).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return MFASecurityResponse(
@@ -70,7 +77,10 @@ def get_my_security(request: Request, db: Session = Depends(get_tenant_db)):
 @router.post("/me/mfa/setup", response_model=MFASetupResponse)
 def setup_my_mfa(request: Request, db: Session = Depends(get_tenant_db)):
     """Enable TOTP MFA for approval-sensitive console actions."""
-    user = db.query(User).filter(User.id == request.state.user_id).first()
+    user = db.query(User).filter(
+        User.id == request.state.user_id,
+        User.tenant_id == request.state.tenant_id,
+    ).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
@@ -83,6 +93,16 @@ def setup_my_mfa(request: Request, db: Session = Depends(get_tenant_db)):
 
     totp = pyotp.TOTP(secret)
     uri = totp.provisioning_uri(name=user.email, issuer_name="AuthClaw Lite")
+
+    # Generate QR code as base64 PNG for display in the UI
+    qr = qrcode.QRCode(box_size=6, border=2)
+    qr.add_data(uri)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    qr_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+
     return MFASetupResponse(
         user_id=user.id,
         email=user.email,
@@ -91,13 +111,17 @@ def setup_my_mfa(request: Request, db: Session = Depends(get_tenant_db)):
         mfa_secret=secret,
         provisioning_uri=uri,
         backup_codes=backup_codes,
+        qr_code_base64=qr_b64,
     )
 
 
 @router.post("/me/mfa/disable", response_model=MFASecurityResponse)
 def disable_my_mfa(request: Request, db: Session = Depends(get_tenant_db)):
     """Disable TOTP MFA for the current console principal."""
-    user = db.query(User).filter(User.id == request.state.user_id).first()
+    user = db.query(User).filter(
+        User.id == request.state.user_id,
+        User.tenant_id == request.state.tenant_id,
+    ).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
