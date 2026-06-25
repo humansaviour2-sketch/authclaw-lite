@@ -49,13 +49,62 @@ interface InviteResult {
   dev_otp?: string;
 }
 
+interface PendingInvite {
+  signup_id: string;
+  email: string;
+  tenant_name: string;
+  invited_role?: string | null;
+  expires_at: string;
+  sent_at?: string | null;
+  resend_count: number;
+  delivery?: string | null;
+  delivery_error?: string | null;
+}
+
+interface SecurityState {
+  user_id: string;
+  email: string;
+  role: string;
+  mfa_enabled: boolean;
+}
+
+interface MFASetupState extends SecurityState {
+  mfa_secret: string;
+  provisioning_uri: string;
+  backup_codes: string[];
+}
+
+interface UsageLimitState {
+  limits_enabled: boolean;
+  requests_per_minute: number;
+  burst_10_seconds: number;
+  daily_requests_limit: number;
+  max_body_bytes: number;
+  max_daily_spend_usd: number;
+  estimated_cost_per_1k_requests_usd: number;
+  requests_today: number;
+  blocked_today: number;
+  allowed_today: number;
+  bytes_today: number;
+  estimated_spend_today_usd: number;
+  requests_remaining_today: number;
+  spend_remaining_today_usd: number;
+}
+
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<"users" | "keys" | "tenant">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "security" | "keys" | "limits" | "tenant">("users");
   const controlPlaneHost = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   
   // List States
   const [users, setUsers] = useState<UserItem[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [apiKeys, setApiKeys] = useState<APIKeyItem[]>([]);
+  const [securityState, setSecurityState] = useState<SecurityState | null>(null);
+  const [mfaSetup, setMfaSetup] = useState<MFASetupState | null>(null);
+  const [mfaBusy, setMfaBusy] = useState(false);
+  const [mfaError, setMfaError] = useState<string | null>(null);
+  const [usageLimits, setUsageLimits] = useState<UsageLimitState | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
   const [tenantId, setTenantId] = useState("Unknown");
   const [tenantStatus, setTenantStatus] = useState("active");
   const [sessionRole, setSessionRole] = useState("viewer");
@@ -94,6 +143,14 @@ export default function SettingsPage() {
         const uData = await uRes.json();
         setUsers(uData || []);
       }
+
+      const invitesRes = await fetch("/api/users/invites");
+      if (invitesRes.ok) {
+        const invitesData = await invitesRes.json();
+        setPendingInvites(invitesData || []);
+      } else if (invitesRes.status === 403) {
+        setPendingInvites([]);
+      }
       
       // Fetch keys
       const kRes = await fetch("/api/api-keys");
@@ -117,6 +174,20 @@ export default function SettingsPage() {
       if (tenantRes.ok) {
         const tenantData = await tenantRes.json();
         setTenantStatus(tenantData.status || "active");
+      }
+
+      const securityRes = await fetch("/api/users/me/security");
+      if (securityRes.ok) {
+        setSecurityState(await securityRes.json());
+      }
+
+      const usageRes = await fetch("/api/usage-limits");
+      if (usageRes.ok) {
+        setUsageLimits(await usageRes.json());
+        setUsageError(null);
+      } else if (usageRes.status !== 403) {
+        const usageData = await usageRes.json().catch(() => ({}));
+        setUsageError(usageData.error || "Could not load usage limits");
       }
     } catch (err: any) {
       console.warn("Settings fetchUsersAndKeys failed:", err.message);
@@ -176,6 +247,53 @@ export default function SettingsPage() {
       setUserError(err.message || "An unexpected error occurred");
     } finally {
       setUserSubmitting(false);
+    }
+  };
+
+  const handleCancelInvite = async (id: string) => {
+    if (!isOwner) return;
+    if (!confirm("Cancel this pending invite? The existing link and OTP will stop working.")) return;
+    try {
+      const res = await fetch(`/api/users/invites/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to cancel invite");
+      setPendingInvites(pendingInvites.filter((invite) => invite.signup_id !== id));
+    } catch (err: any) {
+      setUserError(err.message || "Could not cancel invite");
+    }
+  };
+
+  const handleSetupMfa = async () => {
+    setMfaBusy(true);
+    setMfaError(null);
+    try {
+      const res = await fetch("/api/users/me/mfa/setup", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to enable MFA");
+      setMfaSetup(data);
+      setSecurityState(data);
+      await fetchUsersAndKeys();
+    } catch (err: any) {
+      setMfaError(err.message || "Could not enable MFA");
+    } finally {
+      setMfaBusy(false);
+    }
+  };
+
+  const handleDisableMfa = async () => {
+    if (!confirm("Disable MFA for your console user? Approval-sensitive actions will no longer ask for your TOTP code.")) return;
+    setMfaBusy(true);
+    setMfaError(null);
+    try {
+      const res = await fetch("/api/users/me/mfa/disable", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to disable MFA");
+      setMfaSetup(null);
+      setSecurityState(data);
+      await fetchUsersAndKeys();
+    } catch (err: any) {
+      setMfaError(err.message || "Could not disable MFA");
+    } finally {
+      setMfaBusy(false);
     }
   };
 
@@ -315,6 +433,15 @@ export default function SettingsPage() {
           User Management
         </button>
         <button
+          onClick={() => setActiveTab("security")}
+          className={`pb-3.5 text-sm font-semibold transition relative ${
+            activeTab === "security" ? "text-indigo-400" : "text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          {activeTab === "security" && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500 rounded-full" />}
+          Security / MFA
+        </button>
+        <button
           onClick={() => setActiveTab("keys")}
           disabled={!isOwner}
           className={`pb-3.5 text-sm font-semibold transition relative ${
@@ -323,6 +450,16 @@ export default function SettingsPage() {
         >
           {activeTab === "keys" && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500 rounded-full" />}
           API Keys Lifecycle
+        </button>
+        <button
+          onClick={() => setActiveTab("limits")}
+          disabled={!isOwner && sessionRole !== "admin"}
+          className={`pb-3.5 text-sm font-semibold transition relative ${
+            !isOwner && sessionRole !== "admin" ? "text-slate-700 cursor-not-allowed" : activeTab === "limits" ? "text-indigo-400" : "text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          {activeTab === "limits" && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500 rounded-full" />}
+          Usage Limits
         </button>
         <button
           onClick={() => setActiveTab("tenant")}
@@ -422,6 +559,146 @@ export default function SettingsPage() {
               </table>
             )}
           </div>
+
+          {isOwner && (
+            <div className="rounded-2xl bg-[#09090d] border border-slate-800 shadow-xl overflow-hidden">
+              <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-200">Pending Invites</h3>
+                  <p className="mt-1 text-xs text-slate-500">Track tenant invitations that have not been verified yet.</p>
+                </div>
+                <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] font-semibold text-slate-400">
+                  {pendingInvites.length} pending
+                </span>
+              </div>
+              {pendingInvites.length === 0 ? (
+                <div className="p-6 text-xs text-slate-500">No pending invites.</div>
+              ) : (
+                <div className="divide-y divide-slate-800/70">
+                  {pendingInvites.map((invite) => (
+                    <div key={invite.signup_id} className="flex items-center justify-between gap-4 p-4 text-xs">
+                      <div className="min-w-0">
+                        <div className="font-semibold text-slate-200">{invite.email}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-slate-500">
+                          <span className="capitalize">{invite.invited_role || "viewer"}</span>
+                          <span>Expires {new Date(invite.expires_at).toLocaleString()}</span>
+                          <span>Sent {invite.resend_count + 1} time{invite.resend_count === 0 ? "" : "s"}</span>
+                        </div>
+                        {invite.delivery_error && <div className="mt-1 text-[10px] text-red-300">{invite.delivery_error}</div>}
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUserEmail(invite.email);
+                            setUserRole(invite.invited_role || "viewer");
+                            setUserError(null);
+                            setInviteResult(null);
+                            setIsUserModalOpen(true);
+                          }}
+                          className="rounded-lg border border-slate-700 px-3 py-2 text-[10px] font-semibold text-slate-200 hover:bg-slate-800"
+                        >
+                          Resend
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCancelInvite(invite.signup_id)}
+                          className="rounded-lg border border-red-900/50 px-3 py-2 text-[10px] font-semibold text-red-300 hover:bg-red-950/40"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab: Security / MFA */}
+      {activeTab === "security" && (
+        <div className="space-y-6">
+          <div className="rounded-2xl border border-slate-800 bg-[#09090d] p-6 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-base font-bold text-white">Multi-Factor Authentication</h3>
+                <p className="mt-1 max-w-2xl text-xs text-slate-500">
+                  TOTP MFA protects approval-sensitive console actions. Keep backup codes somewhere safe after setup.
+                </p>
+                {securityState && (
+                  <div className="mt-4 text-xs text-slate-400">
+                    Signed in as <span className="font-semibold text-slate-200">{securityState.email}</span>{" "}
+                    with role <span className="capitalize text-slate-200">{securityState.role}</span>.
+                  </div>
+                )}
+                {mfaError && <div className="mt-3 text-xs text-red-300">{mfaError}</div>}
+              </div>
+              <span
+                className={`shrink-0 rounded-full border px-3 py-1 text-[10px] font-bold uppercase ${
+                  securityState?.mfa_enabled
+                    ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+                    : "border-amber-500/25 bg-amber-500/10 text-amber-200"
+                }`}
+              >
+                MFA {securityState?.mfa_enabled ? "enabled" : "disabled"}
+              </span>
+            </div>
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              {!securityState?.mfa_enabled ? (
+                <button
+                  type="button"
+                  onClick={handleSetupMfa}
+                  disabled={mfaBusy}
+                  className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-60"
+                >
+                  {mfaBusy ? "Enabling..." : "Enable MFA"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleDisableMfa}
+                  disabled={mfaBusy}
+                  className="rounded-lg border border-red-900/50 bg-red-950/20 px-4 py-2 text-xs font-semibold text-red-200 hover:bg-red-950/50 disabled:opacity-60"
+                >
+                  {mfaBusy ? "Disabling..." : "Disable MFA"}
+                </button>
+              )}
+            </div>
+
+            {mfaSetup && (
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                <div className="rounded-xl border border-slate-800 bg-[#07070a] p-4">
+                  <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Authenticator Secret</div>
+                  <div className="select-all break-all font-mono text-xs text-slate-200">{mfaSetup.mfa_secret}</div>
+                  <div className="mt-3 text-[10px] text-slate-500">
+                    Add this secret to Google Authenticator, 1Password, Authy, or any TOTP app.
+                  </div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-[#07070a] p-4">
+                  <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Backup Codes</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {mfaSetup.backup_codes.map((code) => (
+                      <span key={code} className="rounded border border-slate-800 bg-slate-950 px-2 py-1 font-mono text-xs text-slate-200">
+                        {code}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="md:col-span-2 rounded-xl border border-slate-800 bg-[#07070a] p-4">
+                  <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Provisioning URI</div>
+                  <input
+                    readOnly
+                    value={mfaSetup.provisioning_uri}
+                    onFocus={(event) => event.currentTarget.select()}
+                    className="w-full rounded border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-300 outline-none"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -503,6 +780,73 @@ export default function SettingsPage() {
                   ))}
                 </tbody>
               </table>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Usage Limits */}
+      {activeTab === "limits" && (isOwner || sessionRole === "admin") && (
+        <div className="space-y-6">
+          <div className="rounded-2xl border border-slate-800 bg-[#09090d] p-6 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-base font-bold text-white">Gateway Usage & Spend Guardrails</h3>
+                <p className="mt-1 max-w-2xl text-xs text-slate-500">
+                  These caps are enforced at the gateway before provider egress. Spend is an estimate from request volume, not a provider invoice.
+                </p>
+                {usageError && <p className="mt-2 text-xs text-red-300">{usageError}</p>}
+              </div>
+              <span
+                className={`shrink-0 rounded-full border px-3 py-1 text-[10px] font-bold uppercase ${
+                  usageLimits?.limits_enabled
+                    ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+                    : "border-red-500/25 bg-red-500/10 text-red-200"
+                }`}
+              >
+                Limits {usageLimits?.limits_enabled ? "on" : "off"}
+              </span>
+            </div>
+
+            {!usageLimits ? (
+              <div className="mt-6 rounded-xl border border-slate-800 bg-[#07070a] p-6 text-xs text-slate-500">
+                Usage limits are not available for this role or session.
+              </div>
+            ) : (
+              <div className="mt-6 grid gap-4 md:grid-cols-4">
+                {[
+                  ["Requests Today", usageLimits.requests_today.toLocaleString(), `${usageLimits.requests_remaining_today.toLocaleString()} left`],
+                  ["Daily Request Cap", usageLimits.daily_requests_limit.toLocaleString(), "Hard gateway limit"],
+                  ["Est. Spend Today", `$${usageLimits.estimated_spend_today_usd.toFixed(4)}`, `$${usageLimits.spend_remaining_today_usd.toFixed(2)} left`],
+                  ["Blocked Today", usageLimits.blocked_today.toLocaleString(), "Policy/rate blocks"],
+                ].map(([label, value, sub]) => (
+                  <div key={label} className="rounded-xl border border-slate-800 bg-[#07070a] p-4">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</div>
+                    <div className="mt-2 text-2xl font-bold text-white">{value}</div>
+                    <div className="mt-1 text-[10px] text-slate-500">{sub}</div>
+                  </div>
+                ))}
+                <div className="md:col-span-4 grid gap-4 md:grid-cols-4">
+                  <div className="rounded-xl border border-slate-800 bg-[#07070a] p-4">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Minute Limit</div>
+                    <div className="mt-2 text-sm font-semibold text-slate-200">{usageLimits.requests_per_minute} req/min</div>
+                  </div>
+                  <div className="rounded-xl border border-slate-800 bg-[#07070a] p-4">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Burst Limit</div>
+                    <div className="mt-2 text-sm font-semibold text-slate-200">{usageLimits.burst_10_seconds} req/10s</div>
+                  </div>
+                  <div className="rounded-xl border border-slate-800 bg-[#07070a] p-4">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Body Limit</div>
+                    <div className="mt-2 text-sm font-semibold text-slate-200">{Math.round(usageLimits.max_body_bytes / 1024)} KB</div>
+                  </div>
+                  <div className="rounded-xl border border-slate-800 bg-[#07070a] p-4">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Spend Guardrail</div>
+                    <div className="mt-2 text-sm font-semibold text-slate-200">
+                      ${usageLimits.max_daily_spend_usd.toFixed(2)} / day
+                    </div>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         </div>
