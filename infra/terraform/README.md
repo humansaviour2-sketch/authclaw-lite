@@ -9,6 +9,7 @@ It creates a primary regional stack and, by default, a warm secondary regional s
 - ECS/Fargate services for console, backend, gateway, OPA, and Presidio
 - Private Cloud Map service discovery for internal service URLs
 - Encrypted RDS PostgreSQL and encrypted ElastiCache Redis
+- Optional RDS cross-region read replica for the secondary database
 - KMS key, Secrets Manager entries, and CloudWatch log groups
 - Optional audit consumer wired to managed Kafka/MSK and ClickHouse endpoints
 - Optional Route53 primary/secondary failover alias record
@@ -37,13 +38,17 @@ The OPA image must include the AuthClaw Rego policy bundle from `infra/opa`, or 
 
 ## Multi-Region Model
 
-The root module deploys identical regional stacks with separate KMS keys, RDS instances, Redis clusters, ECS services, and secrets. Route53 failover can point the same public name at the primary or secondary ALB.
+The root module deploys regional stacks with separate KMS keys, Redis clusters, ECS services, and secrets. Route53 failover can point the same public name at the primary or secondary ALB.
 
-The Terraform intentionally does not choose a database replication strategy. Before declaring a production multi-region RTO/RPO, pick and test one of:
+By default, `enable_cross_region_db_replica = true` creates the secondary PostgreSQL database as an encrypted RDS cross-region read replica of the primary database. The secondary region receives its own database connection secrets that point at the replica endpoint and use the primary database password. After promotion, the replica endpoint becomes writable without rotating application secrets.
 
-- RDS cross-region read replica with promoted secondary
-- Aurora Global Database
-- Backup/restore runbook with accepted RPO
+This gives AuthClaw a concrete warm-standby RPO/RTO story:
+
+- RPO is bounded by RDS asynchronous replication lag.
+- RTO is the time to promote the replica, confirm write readiness, and route traffic to the secondary ALB.
+- The secondary database is read-only until promotion, so automated Route53 failover must be paired with promotion automation or replaced with a manual failover decision.
+
+Set `enable_cross_region_db_replica = false` only when you intentionally want isolated regional test databases. See `DR_RUNBOOK.md` for the promotion flow.
 
 ## Audit Integrations
 
@@ -58,4 +63,5 @@ This keeps the regional AuthClaw stack portable while still making the audit pat
 
 - The backend image should run migrations before serving traffic, either in its entrypoint or via a one-off ECS task using the same `backend_database_url` secret.
 - Configure ACM certificates in every region where HTTPS listeners are used.
+- Test RDS replica promotion regularly; Terraform creates the standby path, but operations prove the RTO.
 - Avoid committing real `*.tfvars` files; only `*.tfvars.example` is tracked.

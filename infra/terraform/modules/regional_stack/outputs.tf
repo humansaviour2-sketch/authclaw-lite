@@ -11,7 +11,24 @@ output "ecs_cluster_name" {
 }
 
 output "rds_endpoint" {
-  value = aws_db_instance.postgres.address
+  value = local.db_address
+}
+
+output "rds_instance_arn" {
+  value = local.db_arn
+}
+
+output "rds_role" {
+  value = var.replica_source_db_arn != "" ? "cross-region-read-replica" : "primary"
+}
+
+output "replica_source_db_arn" {
+  value = var.replica_source_db_arn
+}
+
+output "db_password" {
+  value     = local.db_password
+  sensitive = true
 }
 
 output "redis_endpoint" {

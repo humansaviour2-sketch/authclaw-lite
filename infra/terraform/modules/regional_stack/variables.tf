@@ -70,6 +70,17 @@ variable "db_allocated_storage" {
   default = 100
 }
 
+variable "db_password" {
+  type      = string
+  default   = ""
+  sensitive = true
+}
+
+variable "replica_source_db_arn" {
+  type    = string
+  default = ""
+}
+
 variable "certificate_arn" {
   type    = string
   default = ""

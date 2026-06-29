@@ -34,6 +34,7 @@ module "primary" {
   clickhouse_user       = var.clickhouse_user
   clickhouse_password   = var.clickhouse_password
   enable_audit_consumer = var.enable_audit_consumer
+  replica_source_db_arn = ""
   tags                  = local.tags
 }
 
@@ -64,6 +65,8 @@ module "secondary" {
   clickhouse_user       = var.clickhouse_user
   clickhouse_password   = var.clickhouse_password
   enable_audit_consumer = var.enable_audit_consumer
+  replica_source_db_arn = var.enable_cross_region_db_replica ? module.primary.rds_instance_arn : ""
+  db_password           = var.enable_cross_region_db_replica ? module.primary.db_password : ""
   tags                  = local.tags
 }
 

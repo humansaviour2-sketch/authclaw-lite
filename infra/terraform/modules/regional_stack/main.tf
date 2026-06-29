@@ -12,6 +12,9 @@ locals {
   gateway_base_url      = "${local.public_scheme}://${local.public_host}:8080"
   internal_opa_url      = "http://opa.${local.namespace_name}:8181"
   internal_presidio_url = "http://presidio.${local.namespace_name}:3000"
+  db_password           = var.db_password != "" ? var.db_password : random_password.db.result
+  db_address            = var.replica_source_db_arn != "" ? aws_db_instance.postgres_replica[0].address : aws_db_instance.postgres_primary[0].address
+  db_arn                = var.replica_source_db_arn != "" ? aws_db_instance.postgres_replica[0].arn : aws_db_instance.postgres_primary[0].arn
 
   public_services = {
     console = {
@@ -289,7 +292,9 @@ resource "aws_db_subnet_group" "main" {
   tags       = var.tags
 }
 
-resource "aws_db_instance" "postgres" {
+resource "aws_db_instance" "postgres_primary" {
+  count = var.replica_source_db_arn == "" ? 1 : 0
+
   identifier              = "${var.name}-postgres"
   engine                  = "postgres"
   engine_version          = var.db_engine_version
@@ -297,7 +302,7 @@ resource "aws_db_instance" "postgres" {
   allocated_storage       = var.db_allocated_storage
   db_name                 = "authclaw"
   username                = "authclaw"
-  password                = random_password.db.result
+  password                = local.db_password
   db_subnet_group_name    = aws_db_subnet_group.main.name
   vpc_security_group_ids  = [aws_security_group.data.id]
   storage_encrypted       = true
@@ -307,6 +312,22 @@ resource "aws_db_instance" "postgres" {
   deletion_protection     = var.is_primary
   skip_final_snapshot     = !var.is_primary
   tags                    = var.tags
+}
+
+resource "aws_db_instance" "postgres_replica" {
+  count = var.replica_source_db_arn != "" ? 1 : 0
+
+  identifier             = "${var.name}-postgres"
+  replicate_source_db    = var.replica_source_db_arn
+  instance_class         = var.db_instance_class
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+  vpc_security_group_ids = [aws_security_group.data.id]
+  storage_encrypted      = true
+  kms_key_id             = aws_kms_key.main.arn
+  multi_az               = false
+  deletion_protection    = false
+  skip_final_snapshot    = true
+  tags                   = merge(var.tags, { Role = "cross-region-read-replica" })
 }
 
 resource "aws_elasticache_subnet_group" "main" {
@@ -370,7 +391,7 @@ resource "aws_secretsmanager_secret" "backend_database_url" {
 
 resource "aws_secretsmanager_secret_version" "backend_database_url" {
   secret_id     = aws_secretsmanager_secret.backend_database_url.id
-  secret_string = "postgresql+psycopg://authclaw:${random_password.db.result}@${aws_db_instance.postgres.address}:5432/authclaw?sslmode=require"
+  secret_string = "postgresql+psycopg://authclaw:${local.db_password}@${local.db_address}:5432/authclaw?sslmode=require"
 }
 
 resource "aws_secretsmanager_secret" "app_database_url" {
@@ -381,7 +402,7 @@ resource "aws_secretsmanager_secret" "app_database_url" {
 
 resource "aws_secretsmanager_secret_version" "app_database_url" {
   secret_id     = aws_secretsmanager_secret.app_database_url.id
-  secret_string = "postgresql://authclaw:${random_password.db.result}@${aws_db_instance.postgres.address}:5432/authclaw?sslmode=require"
+  secret_string = "postgresql://authclaw:${local.db_password}@${local.db_address}:5432/authclaw?sslmode=require"
 }
 
 resource "aws_secretsmanager_secret" "clickhouse_password" {

@@ -66,6 +66,12 @@ variable "enable_secondary" {
   default     = true
 }
 
+variable "enable_cross_region_db_replica" {
+  description = "Create the secondary regional PostgreSQL database as a cross-region read replica of the primary database."
+  type        = bool
+  default     = true
+}
+
 variable "hosted_zone_id" {
   description = "Optional Route53 hosted zone for failover records."
   type        = string
