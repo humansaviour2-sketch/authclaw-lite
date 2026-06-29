@@ -29,6 +29,23 @@ def validate_policy_yaml(yaml_str: str):
             detail="Policy YAML must be a dictionary/object"
         )
 
+    model_rules = config.get("model_rules", {})
+    if model_rules is not None:
+        if not isinstance(model_rules, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="model_rules must be an object"
+            )
+        for field in ("whitelist", "blacklist"):
+            values = model_rules.get(field, [])
+            if values is None:
+                continue
+            if not isinstance(values, list) or any(not isinstance(item, str) or not item.strip() for item in values):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"model_rules.{field} must be a list of non-empty strings"
+                )
+
     regex_rules = config.get("regex_rules", [])
     if not isinstance(regex_rules, list):
         raise HTTPException(
@@ -70,6 +87,47 @@ def validate_policy_yaml(yaml_str: str):
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"regex_rules[{idx}] hitl_timeout_seconds must be an integer between 10 and 1800"
                 )
+
+    topic_rules = config.get("topic_rules", [])
+    if topic_rules is None:
+        topic_rules = []
+    if not isinstance(topic_rules, list):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="topic_rules must be a list"
+        )
+    for idx, rule in enumerate(topic_rules):
+        if not isinstance(rule, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"topic_rules[{idx}] must be an object"
+            )
+        topic = rule.get("topic")
+        if not isinstance(topic, str) or not topic.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"topic_rules[{idx}] missing topic string"
+            )
+        allowed_models = rule.get("allowed_models")
+        if not isinstance(allowed_models, list) or any(not isinstance(item, str) or not item.strip() for item in allowed_models):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"topic_rules[{idx}].allowed_models must be a list of non-empty strings"
+            )
+
+    rate_limits = config.get("rate_limits", {})
+    if rate_limits is not None:
+        if not isinstance(rate_limits, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="rate_limits must be an object"
+            )
+        rpm = rate_limits.get("requests_per_minute", 0)
+        if not isinstance(rpm, int) or rpm < 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="rate_limits.requests_per_minute must be a non-negative integer"
+            )
 
 
 @router.post("", response_model=PolicyResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_roles(["owner", "admin"])])

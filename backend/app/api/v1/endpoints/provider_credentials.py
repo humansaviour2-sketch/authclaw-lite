@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_tenant_db, require_roles, require_scopes
-from app.core.crypto import encrypt_deterministic
+from app.core.crypto import encrypt_secret
 from app.db.models import OnboardingStatus, ProviderCredential
 from app.schemas.models import ProviderCredentialCreate, ProviderCredentialResponse
 
@@ -31,7 +31,7 @@ def create_provider_credential(
     tenant_id = request.state.tenant_id
     user_id = request.state.user_id
 
-    encrypted_secret = encrypt_deterministic(credential_in.api_key)
+    encrypted_secret = encrypt_secret(credential_in.api_key)
 
     # Keep only one active Lite credential per tenant/provider for the demo.
     db.query(ProviderCredential).filter(
@@ -81,7 +81,7 @@ def rotate_provider_credential(
 
     credential.display_name = credential_in.display_name
     credential.endpoint = credential_in.endpoint
-    credential.encrypted_secret = encrypt_deterministic(credential_in.api_key)
+    credential.encrypted_secret = encrypt_secret(credential_in.api_key)
     credential.status = "active"
     credential.last_verified_at = datetime.now(timezone.utc)
     credential.rotated_at = datetime.now(timezone.utc)

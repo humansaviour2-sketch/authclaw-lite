@@ -3,7 +3,10 @@ import base64
 import os
 import hashlib
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.backends import default_backend
+
+SECRET_ENVELOPE_PREFIX = "authclaw-secret-v1:"
 
 
 def get_encryption_key() -> bytes:
@@ -67,3 +70,29 @@ def encrypt_deterministic(plaintext: str) -> str:
     encryptor = cipher.encryptor()
     ciphertext = encryptor.update(_pkcs7_pad(plaintext_bytes)) + encryptor.finalize()
     return base64.b64encode(iv + ciphertext).decode("utf-8")
+
+
+def encrypt_secret(plaintext: str) -> str:
+    """Encrypts provider/API secrets with randomized AES-GCM envelope encryption."""
+    key = get_encryption_key()
+    nonce = os.urandom(12)
+    ciphertext = AESGCM(key).encrypt(nonce, plaintext.encode("utf-8"), None)
+    return SECRET_ENVELOPE_PREFIX + base64.b64encode(nonce + ciphertext).decode("utf-8")
+
+
+def decrypt_secret(ciphertext_str: str) -> str:
+    """Decrypts randomized provider/API secrets, falling back for legacy rows."""
+    if not ciphertext_str.startswith(SECRET_ENVELOPE_PREFIX):
+        return decrypt_deterministic(ciphertext_str)
+
+    payload = ciphertext_str[len(SECRET_ENVELOPE_PREFIX):]
+    try:
+        data = base64.b64decode(payload)
+        if len(data) <= 12:
+            raise ValueError("Ciphertext too short")
+        nonce = data[:12]
+        ciphertext = data[12:]
+        plaintext = AESGCM(get_encryption_key()).decrypt(nonce, ciphertext, None)
+        return plaintext.decode("utf-8")
+    except Exception as e:
+        raise ValueError(f"Failed to decrypt secret: {str(e)}")

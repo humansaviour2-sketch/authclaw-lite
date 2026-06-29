@@ -35,7 +35,7 @@ func LoadProviderCredential(ctx context.Context, tenantID, provider string) (*Pr
 		return nil, err
 	}
 
-	apiKey, err := DecryptDeterministic(encryptedSecret)
+	apiKey, err := DecryptSecret(encryptedSecret)
 	if err != nil {
 		return nil, err
 	}

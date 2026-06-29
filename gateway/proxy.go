@@ -188,8 +188,23 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		copy(originalPrompts, normalized.Prompts)
 	}
 
-	// Load Policy early for Redaction
-	config, policyID, _ := LoadPolicyWithCache(r.Context(), tenantID)
+	// Load policy before any pre-egress rule checks. A malformed or unavailable
+	// tenant policy defaults to deny rather than silently bypassing gateway rules.
+	config, policyID, policyLoadErr := LoadPolicyWithCache(r.Context(), tenantID)
+	if policyLoadErr != nil {
+		log.Printf("[POLICY-ERROR] Early policy load failed: %v", policyLoadErr)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"error":"PolicyEvaluationFailed","message":"Request blocked: policy loading or parsing error"}`))
+		EmitAuditEvent(&AuditEvent{
+			ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
+			TenantID: tenantID, PolicyID: policyID, Action: "block",
+			DecisionReason: "Request blocked: policy loading or parsing error",
+			Provider:       provider, Model: model, PromptCount: promptCount,
+			RequestSize: int(r.ContentLength), ResponseStatus: http.StatusForbidden, DurationMs: 0,
+		})
+		return
+	}
 	var customRules []RegexRule
 	if config != nil {
 		customRules = config.RegexRules
@@ -210,10 +225,7 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if blockMatch != nil {
-			reason := blockMatch.Rule.Reason
-			if reason == "" {
-				reason = fmt.Sprintf("Custom policy rule '%s' blocked request", blockMatch.Rule.Name)
-			}
+			reason := PolicyRuleDecisionReason(blockMatch, "block")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte(fmt.Sprintf(`{"error":"PolicyBlocked","message":"%s"}`, reason)))
@@ -293,11 +305,11 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			EmitAuditEvent(&AuditEvent{
 				ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
 				TenantID: tenantID, PolicyID: policyID, Action: "approval_allow",
-				DecisionReason: fmt.Sprintf("HITL approved: %s", approvalMatch.Rule.Reason),
+				DecisionReason: "HITL approved: " + PolicyRuleDecisionReason(approvalMatch, "require_approval"),
 				Provider:       provider, Model: model, PromptCount: promptCount,
 				RequestSize: int(r.ContentLength), ResponseStatus: http.StatusOK, DurationMs: 0,
 			})
-			finalAllowReason = fmt.Sprintf("HITL approved: %s", approvalMatch.Rule.Reason)
+			finalAllowReason = "HITL approved: " + PolicyRuleDecisionReason(approvalMatch, "require_approval")
 		}
 	}
 

@@ -42,7 +42,19 @@ deny_reasons[msg] if {
 	msg := sprintf("Model '%s' is not in whitelist", [input.model])
 }
 
-# 4. Regex-based Redaction is now handled natively by the Gateway before OPA evaluation.
+# 4. Regex block rules are also enforced by the gateway before provider egress.
+# Keeping the OPA check here gives EvaluatePolicy the same YAML semantics and
+# protects callers that use OPA directly for policy decisions.
+deny_reasons[msg] if {
+	policy := input.policy
+	rule := policy.regex_rules[_]
+	object.get(rule, "action", "redact") == "block"
+	prompt := input.prompts[_]
+	regex.match(rule.pattern, prompt)
+	rule_name := object.get(rule, "name", "unnamed_rule")
+	reason := object.get(rule, "reason", "Regex block")
+	msg := sprintf("Policy rule %q action=block matched: %s", [rule_name, reason])
+}
 
 # 5. Topic classification blocking
 deny_reasons[msg] if {

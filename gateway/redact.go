@@ -382,11 +382,37 @@ func fallbackAnalyze(text string, customRules []RegexRule) []AnalyzeResult {
 // Encryption Helpers (AES-256 CBC Deterministic)
 var encryptionKey []byte
 
-func initEncryptionKey() {
+const secretEnvelopePrefix = "authclaw-secret-v1:"
+
+func isProductionEnv() bool {
+	env := strings.ToLower(strings.TrimSpace(os.Getenv("AUTHCLAW_ENV")))
+	return env == "production" || env == "prod"
+}
+
+func configuredEnvelopeKey() string {
 	keyStr := os.Getenv("ENCRYPTION_KEY")
 	if keyStr == "" {
 		keyStr = os.Getenv("ENVELOPE_KEY")
 	}
+	return keyStr
+}
+
+func ValidateEnvelopeKeyConfig() error {
+	keyStr := configuredEnvelopeKey()
+	if !isProductionEnv() {
+		return nil
+	}
+	if keyStr == "" || keyStr == "authclaw-default-32-byte-key-12" || strings.HasPrefix(keyStr, "demo-") || strings.Contains(keyStr, "change-me") {
+		return fmt.Errorf("ENVELOPE_KEY or ENCRYPTION_KEY must be set to a non-demo value in production")
+	}
+	if len([]byte(keyStr)) < 32 {
+		return fmt.Errorf("ENVELOPE_KEY or ENCRYPTION_KEY must be at least 32 bytes in production")
+	}
+	return nil
+}
+
+func initEncryptionKey() {
+	keyStr := configuredEnvelopeKey()
 	if keyStr == "" {
 		keyStr = "authclaw-default-32-byte-key-12"
 	}
@@ -480,6 +506,59 @@ func DecryptDeterministic(ciphertextStr string) (string, error) {
 	}
 
 	return string(unpadded), nil
+}
+
+func EncryptSecret(plaintext string) (string, error) {
+	if encryptionKey == nil {
+		initEncryptionKey()
+	}
+	block, err := aes.NewCipher(encryptionKey)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), nil)
+	combined := append(nonce, ciphertext...)
+	return secretEnvelopePrefix + base64.StdEncoding.EncodeToString(combined), nil
+}
+
+func DecryptSecret(ciphertextStr string) (string, error) {
+	if !strings.HasPrefix(ciphertextStr, secretEnvelopePrefix) {
+		return DecryptDeterministic(ciphertextStr)
+	}
+	if encryptionKey == nil {
+		initEncryptionKey()
+	}
+	payload := strings.TrimPrefix(ciphertextStr, secretEnvelopePrefix)
+	data, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(encryptionKey)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	if len(data) <= gcm.NonceSize() {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+	nonce := data[:gcm.NonceSize()]
+	ciphertext := data[gcm.NonceSize():]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext), nil
 }
 
 // DB Tenant Context Execution Helper

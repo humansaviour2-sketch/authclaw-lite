@@ -250,6 +250,59 @@ func TestGetOrCreateRedactionTokenIsIdempotentUnderConcurrency(t *testing.T) {
 	}
 }
 
+func TestSecretEnvelopeEncryptionIsRandomizedAndBackwardCompatible(t *testing.T) {
+	t.Setenv("ENVELOPE_KEY", "test-envelope-key-material-32-bytes!!")
+	t.Setenv("ENCRYPTION_KEY", "")
+	encryptionKey = nil
+	defer func() { encryptionKey = nil }()
+
+	first, err := EncryptSecret("sk-provider-secret")
+	if err != nil {
+		t.Fatalf("EncryptSecret failed: %v", err)
+	}
+	second, err := EncryptSecret("sk-provider-secret")
+	if err != nil {
+		t.Fatalf("EncryptSecret failed: %v", err)
+	}
+	if !strings.HasPrefix(first, secretEnvelopePrefix) || !strings.HasPrefix(second, secretEnvelopePrefix) {
+		t.Fatalf("expected secret envelope prefix, got %q and %q", first, second)
+	}
+	if first == second {
+		t.Fatal("expected randomized provider secret ciphertexts to differ")
+	}
+	for _, ciphertext := range []string{first, second} {
+		plaintext, err := DecryptSecret(ciphertext)
+		if err != nil {
+			t.Fatalf("DecryptSecret failed: %v", err)
+		}
+		if plaintext != "sk-provider-secret" {
+			t.Fatalf("unexpected plaintext %q", plaintext)
+		}
+	}
+
+	legacy, err := EncryptDeterministic("legacy-provider-secret")
+	if err != nil {
+		t.Fatalf("EncryptDeterministic failed: %v", err)
+	}
+	plaintext, err := DecryptSecret(legacy)
+	if err != nil {
+		t.Fatalf("DecryptSecret legacy fallback failed: %v", err)
+	}
+	if plaintext != "legacy-provider-secret" {
+		t.Fatalf("unexpected legacy plaintext %q", plaintext)
+	}
+}
+
+func TestValidateEnvelopeKeyConfigRejectsDemoProductionKey(t *testing.T) {
+	t.Setenv("AUTHCLAW_ENV", "production")
+	t.Setenv("ENVELOPE_KEY", "demo-local-envelope-key-change-me")
+	t.Setenv("ENCRYPTION_KEY", "")
+
+	if err := ValidateEnvelopeKeyConfig(); err == nil {
+		t.Fatal("expected production demo envelope key to be rejected")
+	}
+}
+
 func TestRedactEngine(t *testing.T) {
 	// 1. Init DB
 	InitDB()
