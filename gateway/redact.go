@@ -20,6 +20,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -76,6 +77,33 @@ var presidioClientHTTP = &http.Client{
 		IdleConnTimeout:     90 * time.Second,
 	},
 	Timeout: 10 * time.Second,
+}
+
+func envDurationMillis(name string, fallback time.Duration, min time.Duration, max time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	value := time.Duration(ms) * time.Millisecond
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func presidioAnalyzeTimeout() time.Duration {
+	return envDurationMillis("PRESIDIO_ANALYZE_TIMEOUT_MS", 750*time.Millisecond, 100*time.Millisecond, 10*time.Second)
+}
+
+func presidioSlowLogThreshold() time.Duration {
+	return envDurationMillis("PRESIDIO_SLOW_LOG_MS", 500*time.Millisecond, 100*time.Millisecond, 10*time.Second)
 }
 
 func (c *PresidioClient) Analyze(ctx context.Context, text string, customRules []RegexRule) ([]AnalyzeResult, error) {
@@ -227,6 +255,38 @@ func (c *PresidioClient) Analyze(ctx context.Context, text string, customRules [
 	}
 
 	return results, nil
+}
+
+func analyzePromptWithFallback(ctx context.Context, presidio *PresidioClient, prompt string, customRules []RegexRule) []AnalyzeResult {
+	start := time.Now()
+	analyzeCtx, cancel := context.WithTimeout(ctx, presidioAnalyzeTimeout())
+	defer cancel()
+
+	results, err := presidio.Analyze(analyzeCtx, prompt, customRules)
+	duration := time.Since(start)
+	if err != nil {
+		fallbackStart := time.Now()
+		results = fallbackAnalyze(prompt, customRules)
+		log.Printf(
+			"[REDACTION] analyzer=presidio status=fallback duration_ms=%d fallback_duration_ms=%d prompt_chars=%d err=%v",
+			duration.Milliseconds(),
+			time.Since(fallbackStart).Milliseconds(),
+			len([]rune(prompt)),
+			err,
+		)
+		return results
+	}
+
+	results = appendCustomRuleAnalyzeResults(results, prompt, customRules)
+	if duration > presidioSlowLogThreshold() {
+		log.Printf(
+			"[REDACTION] analyzer=presidio status=slow duration_ms=%d prompt_chars=%d findings=%d",
+			duration.Milliseconds(),
+			len([]rune(prompt)),
+			len(results),
+		)
+	}
+	return results
 }
 
 func byteIndexToRuneIndex(text string, byteIndex int) int {
@@ -608,13 +668,7 @@ func RedactPrompts(ctx context.Context, tenantID string, prompts []string, custo
 	redactedPrompts := make([]string, len(prompts))
 
 	for i, prompt := range prompts {
-		results, err := presidio.Analyze(ctx, prompt, customRules)
-		if err != nil {
-			log.Printf("Presidio analysis failed, using regex fallback: %v", err)
-			results = fallbackAnalyze(prompt, customRules)
-		} else {
-			results = appendCustomRuleAnalyzeResults(results, prompt, customRules)
-		}
+		results := analyzePromptWithFallback(ctx, presidio, prompt, customRules)
 
 		// Sort results descending by start index to prevent offset issues during replacements
 		sort.Slice(results, func(i, j int) bool {

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -143,6 +144,48 @@ func TestStreamingReversalReaderGeminiSSE(t *testing.T) {
 	out := string(reversed)
 	if !strings.Contains(out, "John Doe") || strings.Contains(out, "[REDACTED_PERSON_123]") {
 		t.Fatalf("gemini stream was not reversed correctly: %s", out)
+	}
+}
+
+func TestAnalyzePromptWithFallbackTimesOutUnderConcurrency(t *testing.T) {
+	slowAnalyzer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(250 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[]`))
+	}))
+	defer slowAnalyzer.Close()
+
+	t.Setenv("PRESIDIO_ANALYZE_TIMEOUT_MS", "50")
+	t.Setenv("PRESIDIO_SLOW_LOG_MS", "10000")
+
+	client := &PresidioClient{BaseURL: slowAnalyzer.URL}
+	const workers = 20
+	errs := make(chan string, workers)
+	var wg sync.WaitGroup
+
+	start := time.Now()
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results := analyzePromptWithFallback(context.Background(), client, "Contact jane@example.com for support.", nil)
+			for _, result := range results {
+				if result.EntityType == "EMAIL_ADDRESS" {
+					return
+				}
+			}
+			errs <- "fallback did not detect EMAIL_ADDRESS"
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Error(err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("fallback under concurrency took too long: %v", elapsed)
 	}
 }
 

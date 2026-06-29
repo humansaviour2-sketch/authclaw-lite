@@ -81,7 +81,9 @@ class MockProviderHandler(BaseHTTPRequestHandler):
     def send_stream(self, text: str) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "close")
         self.end_headers()
+        self.close_connection = True
         chunks = [
             {"candidates": [{"content": {"parts": [{"text": "Mock stream response for: "}]}}]},
             {"candidates": [{"content": {"parts": [{"text": text}]}}]},

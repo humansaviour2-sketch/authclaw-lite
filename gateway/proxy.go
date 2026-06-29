@@ -307,8 +307,13 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if normalized != nil && len(normalized.Prompts) > 0 {
 			var redactErr error
 			var redactedPrompts []string
+			redactStart := time.Now()
 			redactedPrompts, tokenMap, redactErr = RedactPrompts(r.Context(), tenantID, normalized.Prompts, customRules)
+			redactDurationMs := time.Since(redactStart).Milliseconds()
 			if redactErr == nil {
+				if time.Duration(redactDurationMs)*time.Millisecond >= presidioSlowLogThreshold() {
+					log.Printf("[REDACTION] status=slow_complete duration_ms=%d request_id=%s provider=%s prompt_count=%d token_count=%d", redactDurationMs, requestID, provider, len(normalized.Prompts), len(tokenMap))
+				}
 				log.Printf("[DEBUG] ORIGINAL PROMPT: %v", normalized.Prompts)
 				log.Printf("[DEBUG] REDACTED PROMPT: %v", redactedPrompts)
 				if len(tokenMap) > 0 {
@@ -342,7 +347,7 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					log.Printf("Rebuilding body failed: %v", rebuildErr)
 				}
 			} else {
-				log.Printf("Redaction failed: %v", redactErr)
+				log.Printf("[REDACTION] status=error duration_ms=%d request_id=%s provider=%s prompt_count=%d err=%v", redactDurationMs, requestID, provider, len(normalized.Prompts), redactErr)
 			}
 		}
 	}
@@ -415,6 +420,12 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Create reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, proxyErr error) {
+		log.Printf("[PROXY] status=bad_gateway request_id=%s provider=%s target=%s err=%v", requestID, provider, target.String(), proxyErr)
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(http.StatusBadGateway)
+		rw.Write([]byte(fmt.Sprintf(`{"error":"ProviderProxyError","message":"upstream request failed","provider":"%s"}`, provider)))
+	}
 
 	// Customize director to rewrite target host and request URL
 	originalDirector := proxy.Director

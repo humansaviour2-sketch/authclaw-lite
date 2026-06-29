@@ -82,6 +82,12 @@ counts for heavier load tests.
 
 Official local NFR thresholds are p95 <= 800ms and p99 <= 1000ms for
 100 requests per scenario at concurrency 5 against the local mock provider.
+Gateway redaction uses `PRESIDIO_ANALYZE_TIMEOUT_MS=750` by default, then falls
+back to local regex analysis with structured `[REDACTION]` fallback logs when
+Presidio is slow or unavailable.
+For redaction stress evidence, the benchmark also supports a concurrency-10
+profile with 1200ms p95 and 1500ms p99 thresholds after raising gateway and
+policy rate limits.
 
 - `allow`: normal allowed request
 - `redact`: request containing PII that should be redacted
@@ -98,6 +104,9 @@ python scripts/gateway_latency_benchmark.py --ci --json-output gateway-benchmark
 
 # Heavier local NFR evidence profile after raising gateway and policy rate limits.
 python scripts/gateway_latency_benchmark.py --scenarios allow,redact,block,stream --requests 100 --concurrency 5 --warmup 5 --json-output gateway-benchmark-heavy.json
+
+# Redaction/concurrency stress evidence profile after raising gateway and policy rate limits.
+python scripts/gateway_latency_benchmark.py --scenarios allow,redact,block,stream --requests 100 --concurrency 10 --warmup 5 --json-output gateway-benchmark-concurrency10.json --p95-threshold-ms 1200 --p99-threshold-ms 1500
 
 # HITL is intentionally opt-in because the SRS timeout is 30 minutes.
 python scripts/gateway_latency_benchmark.py --scenarios hitl --allow-hitl --timeout-seconds 1900

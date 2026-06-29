@@ -163,17 +163,22 @@ def send_request(
     try:
         with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
             status = resp.getcode()
-            resp.read(1)
+            first_byte = resp.read(1)
             first_byte_ms = (time.perf_counter() - start) * 1000
-            drain_response(resp)
+            if scenario.stream:
+                drain_stream_until_done(resp, first_byte)
+            else:
+                drain_response(resp)
     except urllib.error.HTTPError as exc:
         status = exc.code
         try:
-            exc.read(1)
+            body = read_response_snippet(exc)
             first_byte_ms = (time.perf_counter() - start) * 1000
-            drain_response(exc)
+            if status not in scenario.expected_statuses:
+                error = f"HTTP {status}: {body}"
         except Exception:
-            pass
+            if status not in scenario.expected_statuses:
+                error = f"HTTP {status}: <failed to read error body>"
     except Exception as exc:  # noqa: BLE001 - benchmark reports transport failures directly.
         error = f"{type(exc).__name__}: {exc}"
     latency_ms = (time.perf_counter() - start) * 1000
@@ -193,6 +198,27 @@ def send_request(
 def drain_response(response: Any) -> None:
     while response.read(65536):
         pass
+
+
+def drain_stream_until_done(response: Any, first_byte: bytes) -> None:
+    buffer = bytearray(first_byte)
+    while b"[DONE]" not in buffer:
+        line = response.readline(8192)
+        if not line:
+            return
+        buffer.extend(line)
+        if len(buffer) > 1024 * 1024:
+            return
+
+
+def read_response_snippet(response: Any, limit: int = 512) -> str:
+    body = response.read(limit + 1)
+    truncated = len(body) > limit
+    drain_response(response)
+    text = body[:limit].decode("utf-8", errors="replace").strip()
+    if truncated:
+        text += "..."
+    return text or "<empty body>"
 
 
 def run_scenario(
