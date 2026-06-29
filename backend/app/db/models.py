@@ -246,6 +246,7 @@ class RedactionToken(Base):
     tenant = relationship("Tenant", back_populates="redaction_tokens")
 
     __table_args__ = (
+        UniqueConstraint("tenant_id", "original_value", "strategy", name="uq_redaction_tokens_tenant_original_strategy"),
         Index("idx_redaction_tenant", "tenant_id"),
         Index("idx_redaction_hash", "token_hash"),
     )

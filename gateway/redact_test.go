@@ -189,6 +189,67 @@ func TestAnalyzePromptWithFallbackTimesOutUnderConcurrency(t *testing.T) {
 	}
 }
 
+func TestGetOrCreateRedactionTokenIsIdempotentUnderConcurrency(t *testing.T) {
+	InitDB()
+
+	var tenantID string
+	err := DB.QueryRow("INSERT INTO tenants (id, name, tier, status) VALUES (gen_random_uuid(), 'Token Race Tenant ' || gen_random_uuid()::text, 'starter', 'active') RETURNING id::text").Scan(&tenantID)
+	if err != nil {
+		t.Fatalf("Failed to insert test tenant: %v", err)
+	}
+	defer DB.Exec("DELETE FROM redaction_tokens WHERE tenant_id = $1", tenantID)
+	defer DB.Exec("DELETE FROM tenants WHERE id = $1", tenantID)
+
+	const workers = 24
+	ctx := context.Background()
+	tokens := make(chan string, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			token, err := GetOrCreateRedactionToken(ctx, tenantID, "jane@example.com", "EMAIL_ADDRESS", "mask")
+			if err != nil {
+				errs <- err
+				return
+			}
+			tokens <- token
+		}()
+	}
+	wg.Wait()
+	close(tokens)
+	close(errs)
+
+	for err := range errs {
+		t.Error(err)
+	}
+
+	first := ""
+	for token := range tokens {
+		if token == "" {
+			t.Fatal("expected non-empty token")
+		}
+		if first == "" {
+			first = token
+			continue
+		}
+		if token != first {
+			t.Fatalf("expected all workers to receive the same token, got %q and %q", first, token)
+		}
+	}
+
+	var count int
+	err = DB.QueryRow("SELECT COUNT(*) FROM redaction_tokens WHERE tenant_id = $1", tenantID).Scan(&count)
+	if err != nil {
+		t.Fatalf("Failed to count redaction tokens: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly one redaction token row, got %d", count)
+	}
+}
+
 func TestRedactEngine(t *testing.T) {
 	// 1. Init DB
 	InitDB()

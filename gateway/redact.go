@@ -633,10 +633,17 @@ func GetOrCreateRedactionToken(ctx context.Context, tenantID, originalValue, ent
 
 		tokenHash := hashToken(tokenVal)
 
-		_, err = tx.ExecContext(ctx,
-			"INSERT INTO redaction_tokens (id, tenant_id, original_value, token_hash, token_value, strategy, created_at) VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NOW())",
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO redaction_tokens (
+				id, tenant_id, original_value, token_hash, token_value, strategy, created_at
+			)
+			VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NOW())
+			ON CONFLICT (tenant_id, original_value, strategy)
+			DO UPDATE SET token_value = redaction_tokens.token_value
+			RETURNING token_value
+		`,
 			tenantID, encVal, tokenHash, tokenVal, strategy,
-		)
+		).Scan(&tokenVal)
 		return err
 	})
 
