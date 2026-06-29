@@ -63,12 +63,12 @@ def validate_policy_yaml(yaml_str: str):
                 detail=f"regex_rules[{idx}] action must be redact, require_approval, or block"
             )
 
-        timeout = rule.get("hitl_timeout_seconds", 300)
+        timeout = rule.get("hitl_timeout_seconds", 1800)
         if action == "require_approval":
-            if not isinstance(timeout, int) or timeout < 10 or timeout > 300:
+            if not isinstance(timeout, int) or timeout < 10 or timeout > 1800:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"regex_rules[{idx}] hitl_timeout_seconds must be an integer between 10 and 300"
+                    detail=f"regex_rules[{idx}] hitl_timeout_seconds must be an integer between 10 and 1800"
                 )
 
 

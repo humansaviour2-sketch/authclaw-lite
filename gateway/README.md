@@ -64,3 +64,41 @@ curl -X POST http://localhost:8080/v1/chat/completions \
     ]
   }'
 ```
+
+### 4. Run latency/load benchmarks
+
+After the demo stack is running and seeded, run the gateway latency benchmark from
+the repository root:
+
+```bash
+python scripts/gateway_latency_benchmark.py --ci
+```
+
+The benchmark reports total p50/p95/p99 latency, p95 time-to-first-byte,
+throughput, status-code counts, and threshold failures for the default safe
+scenarios. The `--ci` profile keeps request volume below the demo gateway's
+default rate limits; raise `GATEWAY_RATE_LIMIT_*` before using larger request
+counts for heavier load tests.
+
+Official local NFR thresholds are p95 <= 800ms and p99 <= 1000ms for
+100 requests per scenario at concurrency 5 against the local mock provider.
+
+- `allow`: normal allowed request
+- `redact`: request containing PII that should be redacted
+- `block`: request matching the starter policy's SSN block rule
+
+Useful variants:
+
+```bash
+# Include a streaming response scenario when the configured provider supports it.
+python scripts/gateway_latency_benchmark.py --scenarios allow,redact,block,stream
+
+# Write machine-readable results for CI/release evidence.
+python scripts/gateway_latency_benchmark.py --ci --json-output gateway-benchmark.json
+
+# Heavier local NFR evidence profile after raising gateway and policy rate limits.
+python scripts/gateway_latency_benchmark.py --scenarios allow,redact,block,stream --requests 100 --concurrency 5 --warmup 5 --json-output gateway-benchmark-heavy.json
+
+# HITL is intentionally opt-in because the SRS timeout is 30 minutes.
+python scripts/gateway_latency_benchmark.py --scenarios hitl --allow-hitl --timeout-seconds 1900
+```

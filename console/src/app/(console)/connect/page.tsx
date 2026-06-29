@@ -791,7 +791,7 @@ export default function ConnectPage() {
               HITL Approval Queue
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              High-risk policy matches wait here. If no one approves within 5 minutes, the gateway blocks the request.
+              High-risk policy matches wait here. If no one approves within 30 minutes, the gateway blocks the request.
             </p>
           </div>
           <button

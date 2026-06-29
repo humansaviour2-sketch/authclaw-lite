@@ -1,0 +1,91 @@
+{
+  "gateway_url": "http://localhost:8080",
+  "provider": "gemini",
+  "model": "gemini-2.5-flash-lite",
+  "requests_per_scenario": 2,
+  "concurrency": 1,
+  "p95_threshold_ms": 750.0,
+  "p99_threshold_ms": 1500.0,
+  "reports": [
+    {
+      "scenario": "allow",
+      "requests": 2,
+      "successes": 2,
+      "failures": 0,
+      "status_counts": {
+        "200": 2
+      },
+      "throughput_rps": 3.0655127667904845,
+      "min_ms": 279.0147000005163,
+      "p50_ms": 315.56985000042914,
+      "p95_ms": 348.4694850003507,
+      "p99_ms": 351.3938970003437,
+      "max_ms": 352.12500000034197,
+      "mean_ms": 315.56985000042914,
+      "first_byte_p50_ms": 315.36780000033104,
+      "first_byte_p95_ms": 348.2238300001427,
+      "first_byte_p99_ms": 351.14436600012596,
+      "errors": []
+    },
+    {
+      "scenario": "redact",
+      "requests": 2,
+      "successes": 2,
+      "failures": 0,
+      "status_counts": {
+        "200": 2
+      },
+      "throughput_rps": 3.835558852429184,
+      "min_ms": 190.80080000003363,
+      "p50_ms": 259.9938500002281,
+      "p95_ms": 322.26759500040316,
+      "p99_ms": 327.8030390004187,
+      "max_ms": 329.1869000004226,
+      "mean_ms": 259.9938500002281,
+      "first_byte_p50_ms": 259.8460999997769,
+      "first_byte_p95_ms": 322.1137699999417,
+      "first_byte_p99_ms": 327.6486739999564,
+      "errors": []
+    },
+    {
+      "scenario": "block",
+      "requests": 2,
+      "successes": 2,
+      "failures": 0,
+      "status_counts": {
+        "403": 2
+      },
+      "throughput_rps": 18.950574060384778,
+      "min_ms": 43.32000000067637,
+      "p50_ms": 49.7496000002684,
+      "p95_ms": 55.53623999990123,
+      "p99_ms": 56.05060799986859,
+      "max_ms": 56.17919999986043,
+      "mean_ms": 49.7496000002684,
+      "first_byte_p50_ms": 49.57030000014129,
+      "first_byte_p95_ms": 55.362250000098356,
+      "first_byte_p99_ms": 55.87709000009454,
+      "errors": []
+    },
+    {
+      "scenario": "stream",
+      "requests": 2,
+      "successes": 2,
+      "failures": 0,
+      "status_counts": {
+        "200": 2
+      },
+      "throughput_rps": 3.309101883278039,
+      "min_ms": 240.01060000045982,
+      "p50_ms": 299.47055000002365,
+      "p95_ms": 352.9845049996311,
+      "p99_ms": 357.7413009995962,
+      "max_ms": 358.9304999995875,
+      "mean_ms": 299.47055000002365,
+      "first_byte_p50_ms": 299.25420000017766,
+      "first_byte_p95_ms": 352.6749600002404,
+      "first_byte_p99_ms": 357.42347200024597,
+      "errors": []
+    }
+  ]
+}

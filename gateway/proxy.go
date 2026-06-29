@@ -483,16 +483,9 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(contentType, "text/event-stream") {
 			resp.Body = NewStreamingReversalReader(resp.Body, tokenMap, provider)
 		} else {
-			bodyBytes, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return err
-			}
-			resp.Body.Close()
-
-			reversedBytes := ReverseStaticResponse(bodyBytes, tokenMap)
-			resp.Body = io.NopCloser(bytes.NewBuffer(reversedBytes))
-			resp.ContentLength = int64(len(reversedBytes))
-			resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(reversedBytes)))
+			resp.Body = NewStaticReversalReader(resp.Body, tokenMap)
+			resp.ContentLength = -1
+			resp.Header.Del("Content-Length")
 		}
 		return nil
 	}

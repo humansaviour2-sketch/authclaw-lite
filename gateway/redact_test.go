@@ -23,6 +23,129 @@ func TestNormalizeDetectedEntityTreatsPhoneLikeUkNhsAsPhoneNumber(t *testing.T) 
 	}
 }
 
+type chunkedReadCloser struct {
+	chunks []string
+	index  int
+}
+
+func (c *chunkedReadCloser) Read(p []byte) (int, error) {
+	if c.index >= len(c.chunks) {
+		return 0, io.EOF
+	}
+	n := copy(p, c.chunks[c.index])
+	c.index++
+	return n, nil
+}
+
+func (c *chunkedReadCloser) Close() error {
+	return nil
+}
+
+func TestStaticReversalReaderReplacesAcrossReadBoundaries(t *testing.T) {
+	tokenMap := map[string]string{"[REDACTED_PERSON_123]": "John Doe"}
+	body := &chunkedReadCloser{
+		chunks: []string{"Hello ", "[REDA", "CTED_PERSON_", "123]", "!"},
+	}
+
+	reversed, err := io.ReadAll(NewStaticReversalReader(body, tokenMap))
+	if err != nil {
+		t.Fatalf("read static reversal: %v", err)
+	}
+	if string(reversed) != "Hello John Doe!" {
+		t.Fatalf("unexpected reversed body: %s", string(reversed))
+	}
+}
+
+func TestStreamingReversalReaderOpenAISSEAcrossEvents(t *testing.T) {
+	tokenMap := map[string]string{"[REDACTED_PERSON_123]": "John Doe"}
+	body := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"Hello [REDA"}}]}`,
+		`data: {"choices":[{"delta":{"content":"CTED_PERSON_123]"}}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	reversed, err := io.ReadAll(NewStreamingReversalReader(io.NopCloser(strings.NewReader(body)), tokenMap, "openai"))
+	if err != nil {
+		t.Fatalf("read streaming reversal: %v", err)
+	}
+	out := string(reversed)
+	if !strings.Contains(out, "John Doe") {
+		t.Fatalf("stream did not reverse token across events: %s", out)
+	}
+	if strings.Contains(out, "[REDACTED_PERSON_123]") {
+		t.Fatalf("stream still contains redacted token: %s", out)
+	}
+	if !strings.Contains(out, "data: [DONE]") {
+		t.Fatalf("stream lost DONE sentinel: %s", out)
+	}
+}
+
+func TestStreamingReversalReaderFlushesBufferedTextBeforeDone(t *testing.T) {
+	tokenMap := map[string]string{"[REDACTED_PERSON_123]": "John Doe"}
+	body := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"Hello [REDA"}}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	reversed, err := io.ReadAll(NewStreamingReversalReader(io.NopCloser(strings.NewReader(body)), tokenMap, "openai"))
+	if err != nil {
+		t.Fatalf("read streaming reversal: %v", err)
+	}
+	out := string(reversed)
+	if !strings.Contains(out, `"content":"Hello "`) {
+		t.Fatalf("stream did not emit safe prefix: %s", out)
+	}
+	if !strings.Contains(out, `"content":"[REDA"`) {
+		t.Fatalf("stream did not flush buffered suffix before DONE: %s", out)
+	}
+	if strings.Index(out, `"content":"[REDA"`) > strings.Index(out, "data: [DONE]") {
+		t.Fatalf("buffered suffix should be emitted before DONE: %s", out)
+	}
+}
+
+func TestStreamingReversalReaderAnthropicSSE(t *testing.T) {
+	tokenMap := map[string]string{"[REDACTED_PERSON_123]": "John Doe"}
+	body := strings.Join([]string{
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi [REDA"}}`,
+		`event: content_block_delta`,
+		`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"CTED_PERSON_123]"}}`,
+		"",
+	}, "\n")
+
+	reversed, err := io.ReadAll(NewStreamingReversalReader(io.NopCloser(strings.NewReader(body)), tokenMap, "anthropic"))
+	if err != nil {
+		t.Fatalf("read anthropic stream: %v", err)
+	}
+	out := string(reversed)
+	if !strings.Contains(out, "John Doe") || strings.Contains(out, "[REDACTED_PERSON_123]") {
+		t.Fatalf("anthropic stream was not reversed correctly: %s", out)
+	}
+	if !strings.Contains(out, "event: content_block_delta") {
+		t.Fatalf("anthropic event lines were not preserved: %s", out)
+	}
+}
+
+func TestStreamingReversalReaderGeminiSSE(t *testing.T) {
+	tokenMap := map[string]string{"[REDACTED_PERSON_123]": "John Doe"}
+	body := strings.Join([]string{
+		`data: {"candidates":[{"content":{"parts":[{"text":"Hi [REDA"}]}}]}`,
+		`data: {"candidates":[{"content":{"parts":[{"text":"CTED_PERSON_123]"}]}}]}`,
+		"",
+	}, "\n")
+
+	reversed, err := io.ReadAll(NewStreamingReversalReader(io.NopCloser(strings.NewReader(body)), tokenMap, "gemini"))
+	if err != nil {
+		t.Fatalf("read gemini stream: %v", err)
+	}
+	out := string(reversed)
+	if !strings.Contains(out, "John Doe") || strings.Contains(out, "[REDACTED_PERSON_123]") {
+		t.Fatalf("gemini stream was not reversed correctly: %s", out)
+	}
+}
+
 func TestRedactEngine(t *testing.T) {
 	// 1. Init DB
 	InitDB()

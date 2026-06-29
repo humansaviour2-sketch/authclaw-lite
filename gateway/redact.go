@@ -709,18 +709,71 @@ func (sr *StreamReverser) Flush() string {
 	return out
 }
 
-type StreamingReversalReader struct {
+type StaticReversalReader struct {
 	originalBody io.ReadCloser
-	scanner      *bufio.Scanner
 	reverser     *StreamReverser
-	provider     string
 	outBuffer    bytes.Buffer
+	eof          bool
+}
+
+func NewStaticReversalReader(originalBody io.ReadCloser, tokenMap map[string]string) *StaticReversalReader {
+	return &StaticReversalReader{
+		originalBody: originalBody,
+		reverser:     NewStreamReverser(tokenMap),
+	}
+}
+
+func (s *StaticReversalReader) Read(p []byte) (int, error) {
+	if s.outBuffer.Len() > 0 {
+		return s.outBuffer.Read(p)
+	}
+	if s.eof {
+		return 0, io.EOF
+	}
+
+	chunk := make([]byte, 32*1024)
+	n, err := s.originalBody.Read(chunk)
+	if n > 0 {
+		s.outBuffer.WriteString(s.reverser.ProcessChunk(string(chunk[:n])))
+		if s.outBuffer.Len() > 0 {
+			return s.outBuffer.Read(p)
+		}
+	}
+	if err == io.EOF {
+		s.eof = true
+		s.outBuffer.WriteString(s.reverser.Flush())
+		if s.outBuffer.Len() > 0 {
+			return s.outBuffer.Read(p)
+		}
+		return 0, io.EOF
+	}
+	if err != nil {
+		return 0, err
+	}
+	return s.Read(p)
+}
+
+func (s *StaticReversalReader) Close() error {
+	return s.originalBody.Close()
+}
+
+type StreamingReversalReader struct {
+	originalBody  io.ReadCloser
+	scanner       *bufio.Scanner
+	reverser      *StreamReverser
+	provider      string
+	outBuffer     bytes.Buffer
+	lastSSEPrefix string
+	sawStructured bool
+	eof           bool
 }
 
 func NewStreamingReversalReader(originalBody io.ReadCloser, tokenMap map[string]string, provider string) *StreamingReversalReader {
+	scanner := bufio.NewScanner(originalBody)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	return &StreamingReversalReader{
 		originalBody: originalBody,
-		scanner:      bufio.NewScanner(originalBody),
+		scanner:      scanner,
 		reverser:     NewStreamReverser(tokenMap),
 		provider:     provider,
 	}
@@ -730,11 +783,15 @@ func (s *StreamingReversalReader) Read(p []byte) (int, error) {
 	if s.outBuffer.Len() > 0 {
 		return s.outBuffer.Read(p)
 	}
+	if s.eof {
+		return 0, io.EOF
+	}
 
 	if s.scanner.Scan() {
 		line := s.scanner.Text()
-		modifiedLine := s.processLine(line)
-		s.outBuffer.WriteString(modifiedLine + "\n")
+		for _, modifiedLine := range s.processLine(line) {
+			s.outBuffer.WriteString(modifiedLine + "\n")
+		}
 		return s.outBuffer.Read(p)
 	}
 
@@ -742,9 +799,12 @@ func (s *StreamingReversalReader) Read(p []byte) (int, error) {
 		return 0, err
 	}
 
-	flushedText := s.reverser.Flush()
-	if flushedText != "" {
-		// If there is any leftover text, output it.
+	s.eof = true
+	for _, line := range s.flushPendingLines() {
+		s.outBuffer.WriteString(line + "\n")
+	}
+	if s.outBuffer.Len() > 0 {
+		return s.outBuffer.Read(p)
 	}
 
 	return 0, io.EOF
@@ -754,132 +814,251 @@ func (s *StreamingReversalReader) Close() error {
 	return s.originalBody.Close()
 }
 
-func extractDeltaText(chunk []byte, provider string) (string, bool) {
-	var data map[string]interface{}
-	if err := json.Unmarshal(chunk, &data); err != nil {
-		return "", false
+func rewriteMapString(data map[string]interface{}, key string, transform func(string) string) bool {
+	value, ok := data[key].(string)
+	if !ok {
+		return false
 	}
+	data[key] = transform(value)
+	return true
+}
 
-	switch provider {
-	case "openai":
-		choices, ok := data["choices"].([]interface{})
-		if !ok || len(choices) == 0 {
-			return "", false
+func rewriteGenericTextFields(data map[string]interface{}, transform func(string) string) bool {
+	rewritten := false
+	for _, key := range []string{"text", "content", "completion"} {
+		if rewriteMapString(data, key, transform) {
+			rewritten = true
 		}
-		choice, ok := choices[0].(map[string]interface{})
-		if !ok {
-			return "", false
-		}
-		delta, ok := choice["delta"].(map[string]interface{})
-		if !ok {
-			return "", false
-		}
-		content, ok := delta["content"].(string)
-		if !ok {
-			return "", false
-		}
-		return content, true
+	}
+	return rewritten
+}
 
-	case "anthropic":
-		delta, ok := data["delta"].(map[string]interface{})
+func rewriteOpenAIText(data map[string]interface{}, transform func(string) string) bool {
+	choices, ok := data["choices"].([]interface{})
+	if !ok {
+		return false
+	}
+	rewritten := false
+	for _, rawChoice := range choices {
+		choice, ok := rawChoice.(map[string]interface{})
 		if !ok {
-			return "", false
+			continue
 		}
-		text, ok := delta["text"].(string)
-		if ok {
-			return text, true
+		if delta, ok := choice["delta"].(map[string]interface{}); ok {
+			if rewriteMapString(delta, "content", transform) {
+				rewritten = true
+			}
 		}
-		return "", false
+		if message, ok := choice["message"].(map[string]interface{}); ok {
+			if rewriteMapString(message, "content", transform) {
+				rewritten = true
+			}
+		}
+		if rewriteMapString(choice, "text", transform) {
+			rewritten = true
+		}
+	}
+	return rewritten
+}
 
-	case "gemini":
-		candidates, ok := data["candidates"].([]interface{})
-		if !ok || len(candidates) == 0 {
-			return "", false
+func rewriteAnthropicText(data map[string]interface{}, transform func(string) string) bool {
+	rewritten := false
+	if delta, ok := data["delta"].(map[string]interface{}); ok {
+		if rewriteMapString(delta, "text", transform) {
+			rewritten = true
 		}
-		cand, ok := candidates[0].(map[string]interface{})
+	}
+	if rewriteMapString(data, "completion", transform) {
+		rewritten = true
+	}
+	if rewriteMapString(data, "text", transform) {
+		rewritten = true
+	}
+	return rewritten
+}
+
+func rewriteGeminiText(data map[string]interface{}, transform func(string) string) bool {
+	candidates, ok := data["candidates"].([]interface{})
+	if !ok {
+		return false
+	}
+	rewritten := false
+	for _, rawCandidate := range candidates {
+		candidate, ok := rawCandidate.(map[string]interface{})
 		if !ok {
-			return "", false
+			continue
 		}
-		content, ok := cand["content"].(map[string]interface{})
+		content, ok := candidate["content"].(map[string]interface{})
 		if !ok {
-			return "", false
+			continue
 		}
 		parts, ok := content["parts"].([]interface{})
-		if !ok || len(parts) == 0 {
-			return "", false
-		}
-		part, ok := parts[0].(map[string]interface{})
 		if !ok {
-			return "", false
+			continue
 		}
-		text, ok := part["text"].(string)
-		if !ok {
-			return "", false
+		for _, rawPart := range parts {
+			part, ok := rawPart.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if rewriteMapString(part, "text", transform) {
+				rewritten = true
+			}
 		}
-		return text, true
 	}
-	return "", false
+	return rewritten
+}
+
+func rewriteDeltaText(chunk []byte, provider string, transform func(string) string) ([]byte, bool, error) {
+	var data map[string]interface{}
+	if err := json.Unmarshal(chunk, &data); err != nil {
+		return nil, false, err
+	}
+
+	rewritten := false
+	switch strings.ToLower(provider) {
+	case "openai":
+		rewritten = rewriteOpenAIText(data, transform)
+	case "anthropic":
+		rewritten = rewriteAnthropicText(data, transform)
+	case "gemini":
+		rewritten = rewriteGeminiText(data, transform)
+	}
+
+	if !rewritten {
+		rewritten = rewriteGenericTextFields(data, transform)
+	}
+	if !rewritten {
+		return nil, false, nil
+	}
+
+	modifiedJSON, err := json.Marshal(data)
+	return modifiedJSON, true, err
+}
+
+func extractDeltaText(chunk []byte, provider string) (string, bool) {
+	var text string
+	found := false
+	_, ok, err := rewriteDeltaText(chunk, provider, func(value string) string {
+		if !found {
+			text = value
+			found = true
+		}
+		return value
+	})
+	return text, ok && found && err == nil
 }
 
 func injectDeltaText(chunk []byte, provider string, newText string) ([]byte, error) {
-	var data map[string]interface{}
-	if err := json.Unmarshal(chunk, &data); err != nil {
+	replaced := false
+	modifiedJSON, ok, err := rewriteDeltaText(chunk, provider, func(value string) string {
+		if !replaced {
+			replaced = true
+			return newText
+		}
+		return value
+	})
+	if err != nil {
 		return nil, err
 	}
-
-	switch provider {
-	case "openai":
-		choices, _ := data["choices"].([]interface{})
-		choice, _ := choices[0].(map[string]interface{})
-		delta, _ := choice["delta"].(map[string]interface{})
-		delta["content"] = newText
-	case "anthropic":
-		delta, _ := data["delta"].(map[string]interface{})
-		delta["text"] = newText
-	case "gemini":
-		candidates, _ := data["candidates"].([]interface{})
-		cand, _ := candidates[0].(map[string]interface{})
-		content, _ := cand["content"].(map[string]interface{})
-		parts, _ := content["parts"].([]interface{})
-		part, _ := parts[0].(map[string]interface{})
-		part["text"] = newText
+	if !ok {
+		return chunk, nil
 	}
-
-	return json.Marshal(data)
+	return modifiedJSON, nil
 }
 
-func (s *StreamingReversalReader) processLine(line string) string {
-	if strings.HasPrefix(line, "data: ") {
-		jsonStr := strings.TrimPrefix(line, "data: ")
-		if jsonStr == "[DONE]" {
-			return line
+func splitSSEDataLine(line string) (prefix string, payload string, ok bool) {
+	if !strings.HasPrefix(line, "data:") {
+		return "", "", false
+	}
+	payload = strings.TrimPrefix(line, "data:")
+	if strings.HasPrefix(payload, " ") {
+		return "data: ", strings.TrimPrefix(payload, " "), true
+	}
+	return "data:", payload, true
+}
+
+func syntheticDeltaPayload(provider string, text string) []byte {
+	var data map[string]interface{}
+	switch strings.ToLower(provider) {
+	case "openai":
+		data = map[string]interface{}{
+			"choices": []interface{}{
+				map[string]interface{}{
+					"delta": map[string]interface{}{"content": text},
+				},
+			},
 		}
-		text, ok := extractDeltaText([]byte(jsonStr), s.provider)
-		if !ok {
-			return line
+	case "anthropic":
+		data = map[string]interface{}{
+			"type":  "content_block_delta",
+			"delta": map[string]interface{}{"type": "text_delta", "text": text},
 		}
-		newText := s.reverser.ProcessChunk(text)
-		modifiedJSON, err := injectDeltaText([]byte(jsonStr), s.provider, newText)
-		if err != nil {
-			return line
+	case "gemini":
+		data = map[string]interface{}{
+			"candidates": []interface{}{
+				map[string]interface{}{
+					"content": map[string]interface{}{
+						"parts": []interface{}{map[string]interface{}{"text": text}},
+					},
+				},
+			},
 		}
-		return "data: " + string(modifiedJSON)
+	default:
+		data = map[string]interface{}{"text": text}
+	}
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return []byte(text)
+	}
+	return payload
+}
+
+func (s *StreamingReversalReader) flushPendingLines() []string {
+	flushedText := s.reverser.Flush()
+	if flushedText == "" {
+		return nil
+	}
+	if !s.sawStructured {
+		return []string{flushedText}
+	}
+	payload := string(syntheticDeltaPayload(s.provider, flushedText))
+	if s.lastSSEPrefix != "" {
+		return []string{s.lastSSEPrefix + payload}
+	}
+	return []string{payload}
+}
+
+func (s *StreamingReversalReader) processLine(line string) []string {
+	if prefix, payload, ok := splitSSEDataLine(line); ok {
+		if strings.TrimSpace(payload) == "[DONE]" {
+			lines := s.flushPendingLines()
+			return append(lines, line)
+		}
+		modifiedJSON, ok, err := rewriteDeltaText([]byte(payload), s.provider, func(text string) string {
+			return s.reverser.ProcessChunk(text)
+		})
+		if err != nil || !ok {
+			return []string{line}
+		}
+		s.lastSSEPrefix = prefix
+		s.sawStructured = true
+		return []string{prefix + string(modifiedJSON)}
 	}
 
 	if strings.HasPrefix(strings.TrimSpace(line), "{") {
-		text, ok := extractDeltaText([]byte(line), s.provider)
-		if !ok {
-			return line
+		modifiedJSON, ok, err := rewriteDeltaText([]byte(line), s.provider, func(text string) string {
+			return s.reverser.ProcessChunk(text)
+		})
+		if err != nil || !ok {
+			return []string{line}
 		}
-		newText := s.reverser.ProcessChunk(text)
-		modifiedJSON, err := injectDeltaText([]byte(line), s.provider, newText)
-		if err != nil {
-			return line
-		}
-		return string(modifiedJSON)
+		s.lastSSEPrefix = ""
+		s.sawStructured = true
+		return []string{string(modifiedJSON)}
 	}
 
-	return line
+	return []string{line}
 }
 
 // Latency Profiling Wrapper

@@ -211,7 +211,7 @@ function buildPolicyYaml(rules: RedactionRule[], modelWhitelist: string[], reque
         `    action: ${rule.action}`,
       ];
       if (rule.action === "require_approval") {
-        lines.push("    hitl_timeout_seconds: 300");
+        lines.push("    hitl_timeout_seconds: 1800");
       }
       return lines.join("\n");
     })

@@ -1,0 +1,91 @@
+{
+  "gateway_url": "http://localhost:8080",
+  "provider": "gemini",
+  "model": "gemini-2.5-flash-lite",
+  "requests_per_scenario": 100,
+  "concurrency": 5,
+  "p95_threshold_ms": 800.0,
+  "p99_threshold_ms": 1000.0,
+  "reports": [
+    {
+      "scenario": "allow",
+      "requests": 100,
+      "successes": 100,
+      "failures": 0,
+      "status_counts": {
+        "200": 100
+      },
+      "throughput_rps": 13.965409050392793,
+      "min_ms": 87.77980000013486,
+      "p50_ms": 336.85960000002524,
+      "p95_ms": 632.8617899999699,
+      "p99_ms": 675.3930529994979,
+      "max_ms": 689.0800999999556,
+      "mean_ms": 352.45756299994355,
+      "first_byte_p50_ms": 336.70405000020764,
+      "first_byte_p95_ms": 632.6651500003663,
+      "first_byte_p99_ms": 675.1820919995772,
+      "errors": []
+    },
+    {
+      "scenario": "redact",
+      "requests": 100,
+      "successes": 100,
+      "failures": 0,
+      "status_counts": {
+        "200": 100
+      },
+      "throughput_rps": 12.149475778064504,
+      "min_ms": 200.34320000013395,
+      "p50_ms": 391.23374999962834,
+      "p95_ms": 629.9202549998881,
+      "p99_ms": 714.063603999448,
+      "max_ms": 725.9835999993811,
+      "mean_ms": 402.86363399995935,
+      "first_byte_p50_ms": 391.040349999912,
+      "first_byte_p95_ms": 629.7732300004554,
+      "first_byte_p99_ms": 713.9341769994372,
+      "errors": []
+    },
+    {
+      "scenario": "block",
+      "requests": 100,
+      "successes": 100,
+      "failures": 0,
+      "status_counts": {
+        "403": 100
+      },
+      "throughput_rps": 49.28120406989968,
+      "min_ms": 17.396399999597634,
+      "p50_ms": 91.52364999999918,
+      "p95_ms": 185.77644000019973,
+      "p99_ms": 217.78337399955512,
+      "max_ms": 261.6377999993347,
+      "mean_ms": 99.45711300008043,
+      "first_byte_p50_ms": 91.3858000003529,
+      "first_byte_p95_ms": 185.62686499994925,
+      "first_byte_p99_ms": 217.60108599964065,
+      "errors": []
+    },
+    {
+      "scenario": "stream",
+      "requests": 100,
+      "successes": 100,
+      "failures": 0,
+      "status_counts": {
+        "200": 100
+      },
+      "throughput_rps": 13.773927860871796,
+      "min_ms": 146.683099999791,
+      "p50_ms": 349.89649999988615,
+      "p95_ms": 538.6435649994382,
+      "p99_ms": 589.0777399997036,
+      "max_ms": 813.8215999997556,
+      "mean_ms": 356.90115700001115,
+      "first_byte_p50_ms": 349.7818999999254,
+      "first_byte_p95_ms": 538.4688500000266,
+      "first_byte_p99_ms": 588.9238769997077,
+      "errors": []
+    }
+  ]
+}
