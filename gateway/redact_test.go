@@ -253,6 +253,8 @@ func TestGetOrCreateRedactionTokenIsIdempotentUnderConcurrency(t *testing.T) {
 func TestSecretEnvelopeEncryptionIsRandomizedAndBackwardCompatible(t *testing.T) {
 	t.Setenv("ENVELOPE_KEY", "test-envelope-key-material-32-bytes!!")
 	t.Setenv("ENCRYPTION_KEY", "")
+	t.Setenv("AUTHCLAW_SECRET_PROVIDER", "env")
+	t.Setenv("AUTHCLAW_SECRET_KEY_VERSION", "v9")
 	encryptionKey = nil
 	defer func() { encryptionKey = nil }()
 
@@ -264,7 +266,7 @@ func TestSecretEnvelopeEncryptionIsRandomizedAndBackwardCompatible(t *testing.T)
 	if err != nil {
 		t.Fatalf("EncryptSecret failed: %v", err)
 	}
-	if !strings.HasPrefix(first, secretEnvelopePrefix) || !strings.HasPrefix(second, secretEnvelopePrefix) {
+	if !strings.HasPrefix(first, secretEnvelopeV2Prefix+"env:v9:") || !strings.HasPrefix(second, secretEnvelopeV2Prefix+"env:v9:") {
 		t.Fatalf("expected secret envelope prefix, got %q and %q", first, second)
 	}
 	if first == second {
@@ -293,8 +295,35 @@ func TestSecretEnvelopeEncryptionIsRandomizedAndBackwardCompatible(t *testing.T)
 	}
 }
 
+func TestSecretEnvelopeVersionedKeyRotation(t *testing.T) {
+	t.Setenv("AUTHCLAW_SECRET_PROVIDER", "env")
+	t.Setenv("AUTHCLAW_SECRET_KEY_VERSION", "v2")
+	t.Setenv("ENVELOPE_KEY_V1", "old-test-envelope-key-material-32!!")
+	t.Setenv("ENVELOPE_KEY_V2", "new-test-envelope-key-material-32!!")
+	t.Setenv("ENVELOPE_KEY", "")
+	t.Setenv("ENCRYPTION_KEY", "")
+	encryptionKey = nil
+	defer func() { encryptionKey = nil }()
+
+	ciphertext, err := EncryptSecret("rotated-provider-secret")
+	if err != nil {
+		t.Fatalf("EncryptSecret failed: %v", err)
+	}
+	if !strings.HasPrefix(ciphertext, secretEnvelopeV2Prefix+"env:v2:") {
+		t.Fatalf("expected v2 versioned envelope, got %q", ciphertext)
+	}
+	plaintext, err := DecryptSecret(ciphertext)
+	if err != nil {
+		t.Fatalf("DecryptSecret failed: %v", err)
+	}
+	if plaintext != "rotated-provider-secret" {
+		t.Fatalf("unexpected plaintext %q", plaintext)
+	}
+}
+
 func TestValidateEnvelopeKeyConfigRejectsDemoProductionKey(t *testing.T) {
 	t.Setenv("AUTHCLAW_ENV", "production")
+	t.Setenv("AUTHCLAW_SECRET_KEY_VERSION", "v1")
 	t.Setenv("ENVELOPE_KEY", "demo-local-envelope-key-change-me")
 	t.Setenv("ENCRYPTION_KEY", "")
 

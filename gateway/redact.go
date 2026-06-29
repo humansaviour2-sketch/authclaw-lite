@@ -383,6 +383,7 @@ func fallbackAnalyze(text string, customRules []RegexRule) []AnalyzeResult {
 var encryptionKey []byte
 
 const secretEnvelopePrefix = "authclaw-secret-v1:"
+const secretEnvelopeV2Prefix = "authclaw-secret-v2:"
 
 func isProductionEnv() bool {
 	env := strings.ToLower(strings.TrimSpace(os.Getenv("AUTHCLAW_ENV")))
@@ -397,11 +398,43 @@ func configuredEnvelopeKey() string {
 	return keyStr
 }
 
+func secretProvider() string {
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("AUTHCLAW_SECRET_PROVIDER")))
+	if provider == "" {
+		return "env"
+	}
+	return provider
+}
+
+func secretKeyVersion() string {
+	version := strings.TrimSpace(os.Getenv("AUTHCLAW_SECRET_KEY_VERSION"))
+	if version == "" {
+		return "v1"
+	}
+	return version
+}
+
+func envVersionedEnvelopeKey(version string) string {
+	suffix := strings.ToUpper(strings.ReplaceAll(version, "-", "_"))
+	if key := os.Getenv("ENVELOPE_KEY_" + suffix); key != "" {
+		return key
+	}
+	return configuredEnvelopeKey()
+}
+
 func ValidateEnvelopeKeyConfig() error {
-	keyStr := configuredEnvelopeKey()
 	if !isProductionEnv() {
 		return nil
 	}
+	provider := secretProvider()
+	version := secretKeyVersion()
+	if os.Getenv("AUTHCLAW_SECRET_KEY_VERSION") == "" {
+		return fmt.Errorf("AUTHCLAW_SECRET_KEY_VERSION must be set in production")
+	}
+	if provider != "env" {
+		return fmt.Errorf("gateway supports AUTHCLAW_SECRET_PROVIDER=env; configure backend/gateway with decrypted runtime envelope material for provider %q", provider)
+	}
+	keyStr := envVersionedEnvelopeKey(version)
 	if keyStr == "" || keyStr == "authclaw-default-32-byte-key-12" || strings.HasPrefix(keyStr, "demo-") || strings.Contains(keyStr, "change-me") {
 		return fmt.Errorf("ENVELOPE_KEY or ENCRYPTION_KEY must be set to a non-demo value in production")
 	}
@@ -411,20 +444,30 @@ func ValidateEnvelopeKeyConfig() error {
 	return nil
 }
 
-func initEncryptionKey() {
-	keyStr := configuredEnvelopeKey()
+func normalizeEnvelopeKey(keyStr string) []byte {
 	if keyStr == "" {
 		keyStr = "authclaw-default-32-byte-key-12"
 	}
 	if len(keyStr) > 32 {
-		encryptionKey = []byte(keyStr[:32])
-	} else if len(keyStr) < 32 {
+		return []byte(keyStr[:32])
+	}
+	if len(keyStr) < 32 {
 		k := make([]byte, 32)
 		copy(k, keyStr)
-		encryptionKey = k
-	} else {
-		encryptionKey = []byte(keyStr)
+		return k
 	}
+	return []byte(keyStr)
+}
+
+func initEncryptionKey() {
+	encryptionKey = normalizeEnvelopeKey(configuredEnvelopeKey())
+}
+
+func secretEnvelopeKey(provider, version string) ([]byte, error) {
+	if provider != "env" {
+		return nil, fmt.Errorf("unsupported secret provider %q in gateway", provider)
+	}
+	return normalizeEnvelopeKey(envVersionedEnvelopeKey(version)), nil
 }
 
 func pkcs7Pad(data []byte, blockSize int) []byte {
@@ -509,10 +552,13 @@ func DecryptDeterministic(ciphertextStr string) (string, error) {
 }
 
 func EncryptSecret(plaintext string) (string, error) {
-	if encryptionKey == nil {
-		initEncryptionKey()
+	provider := secretProvider()
+	version := secretKeyVersion()
+	key, err := secretEnvelopeKey(provider, version)
+	if err != nil {
+		return "", err
 	}
-	block, err := aes.NewCipher(encryptionKey)
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
 	}
@@ -526,10 +572,44 @@ func EncryptSecret(plaintext string) (string, error) {
 	}
 	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), nil)
 	combined := append(nonce, ciphertext...)
-	return secretEnvelopePrefix + base64.StdEncoding.EncodeToString(combined), nil
+	return secretEnvelopeV2Prefix + provider + ":" + version + ":" + base64.StdEncoding.EncodeToString(combined), nil
 }
 
 func DecryptSecret(ciphertextStr string) (string, error) {
+	if strings.HasPrefix(ciphertextStr, secretEnvelopeV2Prefix) {
+		envelope := strings.TrimPrefix(ciphertextStr, secretEnvelopeV2Prefix)
+		parts := strings.SplitN(envelope, ":", 3)
+		if len(parts) != 3 {
+			return "", fmt.Errorf("invalid v2 secret envelope")
+		}
+		provider, version, payload := parts[0], parts[1], parts[2]
+		key, err := secretEnvelopeKey(provider, version)
+		if err != nil {
+			return "", err
+		}
+		data, err := base64.StdEncoding.DecodeString(payload)
+		if err != nil {
+			return "", err
+		}
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			return "", err
+		}
+		gcm, err := cipher.NewGCM(block)
+		if err != nil {
+			return "", err
+		}
+		if len(data) <= gcm.NonceSize() {
+			return "", fmt.Errorf("ciphertext too short")
+		}
+		nonce := data[:gcm.NonceSize()]
+		ciphertext := data[gcm.NonceSize():]
+		plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+		if err != nil {
+			return "", err
+		}
+		return string(plaintext), nil
+	}
 	if !strings.HasPrefix(ciphertextStr, secretEnvelopePrefix) {
 		return DecryptDeterministic(ciphertextStr)
 	}

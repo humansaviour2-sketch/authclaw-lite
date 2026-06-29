@@ -42,6 +42,26 @@ interface AuditRecord {
   [key: string]: any;
 }
 
+const parseExecutionTrace = (trace: unknown): string[] => {
+  if (!trace) return [];
+  if (Array.isArray(trace)) return trace.map((item) => String(item));
+  if (typeof trace === "string") {
+    try {
+      const parsed = JSON.parse(trace);
+      return Array.isArray(parsed) ? parsed.map((item) => String(item)) : [trace];
+    } catch {
+      return [trace];
+    }
+  }
+  return [String(trace)];
+};
+
+const traceValue = (trace: string[], key: string) => {
+  const prefix = `${key}=`;
+  const item = trace.find((entry) => entry.startsWith(prefix));
+  return item ? item.slice(prefix.length) : "";
+};
+
 export default function AuditPage() {
   const [records, setRecords] = useState<AuditRecord[]>([]);
   const [total, setTotal] = useState(0);
@@ -669,6 +689,86 @@ export default function AuditPage() {
                   </div>
                 </div>
               )}
+
+              {selectedRecord.action?.startsWith("workflow:") && (() => {
+                const trace = parseExecutionTrace(selectedRecord.execution_trace);
+                const workflowId = traceValue(trace, "workflow_id");
+                const actionId = traceValue(trace, "action_id");
+                const control = traceValue(trace, "control");
+                const attempt = traceValue(trace, "attempt");
+                const actionStatus = traceValue(trace, "action_status");
+                const actionError = traceValue(trace, "error");
+                const transition = traceValue(trace, "transition") || selectedRecord.reason?.replace(/\s*\[[^\]]+\]\s*$/, "") || "Workflow transition";
+                const status = selectedRecord.reason?.match(/\[([^\]]+)\]/)?.[1] || selectedRecord.action.replace("workflow:", "");
+                const isRemediationAction = selectedRecord.action.startsWith("workflow:remediation_action_");
+                const isRollback = transition.includes("ROLLBACK");
+                const isFailure = status.toLowerCase().includes("fail") || transition.includes("FAILED");
+
+                return (
+                  <div>
+                    <h4 className="text-[10px] font-bold uppercase tracking-wider text-indigo-400 mb-2.5">
+                      Workflow State Transition
+                    </h4>
+                    <div className="p-4 rounded-xl border border-slate-800 bg-[#07070a] space-y-3 text-[11px]">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <span className="text-slate-550 text-[9px] font-black uppercase">Transition</span>
+                          <p className="font-mono text-slate-250 mt-0.5 break-all">{transition}</p>
+                        </div>
+                        <span className={`shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[9px] font-bold uppercase ${
+                          isFailure
+                            ? "bg-red-500/10 border-red-500/20 text-red-400"
+                            : isRollback
+                              ? "bg-amber-500/10 border-amber-500/20 text-amber-400"
+                              : "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                        }`}>
+                          {isFailure ? <XCircle className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
+                          {status}
+                        </span>
+                      </div>
+
+                      {workflowId && (
+                        <div>
+                          <span className="text-slate-550 text-[9px] font-black uppercase">Workflow ID</span>
+                          <p className="font-mono text-[10px] text-slate-350 mt-0.5 break-all select-all">{workflowId}</p>
+                        </div>
+                      )}
+
+                      {isRemediationAction && (
+                        <div className="grid grid-cols-2 gap-3 rounded border border-slate-850 bg-slate-950/40 p-3">
+                          <div className="col-span-2">
+                            <span className="text-slate-550 text-[9px] font-black uppercase">Action ID</span>
+                            <p className="font-mono text-[10px] text-slate-350 mt-0.5 break-all select-all">{actionId || "N/A"}</p>
+                          </div>
+                          <div className="col-span-2">
+                            <span className="text-slate-550 text-[9px] font-black uppercase">Control</span>
+                            <p className="font-mono text-[10px] text-slate-350 mt-0.5 break-all">{control || "N/A"}</p>
+                          </div>
+                          <div>
+                            <span className="text-slate-550 text-[9px] font-black uppercase">Attempt</span>
+                            <p className="font-semibold text-slate-300 mt-0.5">{attempt || "0"}</p>
+                          </div>
+                          <div>
+                            <span className="text-slate-550 text-[9px] font-black uppercase">Action Status</span>
+                            <p className="font-semibold text-slate-300 mt-0.5">{actionStatus || status}</p>
+                          </div>
+                          {actionError && (
+                            <div className="col-span-2 rounded border border-red-500/20 bg-red-500/10 p-2 text-[10px] text-red-300">
+                              {actionError}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {isRollback && (
+                        <div className="rounded border border-amber-500/15 bg-amber-500/10 p-2 text-[10px] text-amber-300 leading-normal">
+                          Rollback path entered. Check the remediation workflow inspector for per-action rollback results.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Custom Attributes (Supporting future/arbitrary event types) */}
               {(() => {

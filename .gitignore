@@ -25,6 +25,14 @@ venv/
 # Test caches
 .pytest_cache/
 
+# Terraform
+.terraform/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
 # OS files
 .DS_Store
 Thumbs.db

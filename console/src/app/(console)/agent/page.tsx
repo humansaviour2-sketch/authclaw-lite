@@ -30,6 +30,15 @@ interface Workflow {
   current_state: string;
   execution_status: string;
   risk_score: number | null;
+  findings?: Record<string, unknown>[];
+  remediation_plan?: Record<string, unknown>[];
+  remediation_state?: string | null;
+  remediation_actions?: RemediationAction[];
+  rollback_result?: RollbackResult | null;
+  execution_result?: RemediationExecutionResult | null;
+  error_message?: string | null;
+  retry_count?: number;
+  state_data?: WorkflowStateData;
   started_at: string;
   completed_at: string | null;
   approval_id: string | null;
@@ -50,6 +59,183 @@ interface Message {
   text: string;
   timestamp: Date;
   results?: any;
+}
+
+interface RemediationAction {
+  id?: string;
+  finding_control?: string;
+  action?: string;
+  status?: string;
+  attempts?: number;
+  completed_at?: string;
+  last_error?: string;
+  rollback_result?: {
+    status?: string;
+    details?: string;
+  };
+  result?: {
+    control?: string;
+    details?: string;
+  };
+}
+
+interface RollbackResult {
+  rollback_successful?: number;
+  rollback_failed?: number;
+}
+
+interface RemediationExecutionResult {
+  remediation_state?: string;
+  actions_successful?: number;
+  actions_executed?: number;
+  actions?: RemediationAction[];
+}
+
+interface WorkflowStateData {
+  remediation_actions?: RemediationAction[];
+  rollback_result?: RollbackResult | null;
+}
+
+type WorkflowInspection = Partial<Workflow> & {
+  workflow_id?: string;
+};
+
+const formatStateLabel = (value?: string | null) => {
+  if (!value) return "Not Started";
+  return value.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const getRemediationActions = (workflow?: WorkflowInspection | null): RemediationAction[] => {
+  return workflow?.remediation_actions || workflow?.execution_result?.actions || workflow?.state_data?.remediation_actions || [];
+};
+
+const getRollbackResult = (workflow?: WorkflowInspection | null): RollbackResult | null => {
+  return workflow?.rollback_result || workflow?.state_data?.rollback_result || null;
+};
+
+const getActionStatusClass = (status?: string) => {
+  switch (status) {
+    case "SUCCEEDED":
+    case "ROLLED_BACK":
+      return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+    case "FAILED":
+    case "ROLLBACK_FAILED":
+      return "bg-red-500/10 text-red-400 border-red-500/20";
+    case "RUNNING":
+      return "bg-sky-500/10 text-sky-400 border-sky-500/20 animate-pulse";
+    default:
+      return "bg-slate-800/70 text-slate-400 border-slate-700";
+  }
+};
+
+function RemediationTimeline({ workflow }: { workflow: WorkflowInspection }) {
+  const actions = getRemediationActions(workflow);
+  const rollback = getRollbackResult(workflow);
+  const result = workflow?.execution_result || {};
+  const remediationState = workflow?.remediation_state || result.remediation_state || "NOT_STARTED";
+
+  if (!actions.length && !workflow?.approval_id && !workflow?.error_message) {
+    return (
+      <div className="space-y-2 text-[10px] text-slate-400">
+        <div className="flex items-center gap-2">
+          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+          <span>Initial scan completed.</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Activity className="w-3.5 h-3.5 text-slate-500" />
+          <span>No remediation has been applied yet.</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-850 pb-2">
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">State Machine</p>
+          <p className="text-slate-250 font-bold">{formatStateLabel(remediationState)}</p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-[9px]">
+          <span className="px-2 py-0.5 rounded-full border border-slate-700 bg-slate-900/40 text-slate-400">
+            {result.actions_successful ?? 0}/{result.actions_executed ?? actions.length} successful
+          </span>
+          {typeof workflow?.retry_count === "number" && workflow.retry_count > 0 && (
+            <span className="px-2 py-0.5 rounded-full border border-amber-500/20 bg-amber-500/10 text-amber-400">
+              {workflow.retry_count} retr{workflow.retry_count === 1 ? "y" : "ies"}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {workflow?.approval_id && !actions.length && (
+        <div className="flex items-center gap-2 text-[10px] text-amber-400">
+          <AlertTriangle className="w-3.5 h-3.5" />
+          <span>Awaiting approval: {workflow.approval_id}</span>
+        </div>
+      )}
+
+      {actions.length > 0 && (
+        <div className="space-y-2">
+          {actions.map((action: RemediationAction, idx: number) => (
+            <div key={action.id || idx} className="relative pl-5">
+              <div className="absolute left-1.5 top-1 h-full w-px bg-slate-800" />
+              <div className={`absolute left-0 top-1.5 h-3 w-3 rounded-full border ${
+                action.status === "FAILED" || action.status === "ROLLBACK_FAILED"
+                  ? "bg-red-500/20 border-red-400"
+                  : action.status === "SUCCEEDED" || action.status === "ROLLED_BACK"
+                    ? "bg-emerald-500/20 border-emerald-400"
+                    : "bg-sky-500/20 border-sky-400"
+              }`} />
+              <div className="rounded border border-slate-850 bg-[#050509] p-2.5 space-y-1.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-mono text-[10px] text-slate-300 break-all">{action.finding_control || action.result?.control || "Unknown control"}</p>
+                    <p className="text-[10px] text-slate-500 leading-normal">{action.action || action.result?.details || "Remediation action"}</p>
+                  </div>
+                  <span className={`shrink-0 px-1.5 py-0.5 rounded border text-[8px] font-black uppercase ${getActionStatusClass(action.status)}`}>
+                    {formatStateLabel(action.status)}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2 text-[9px] text-slate-500">
+                  <span>Attempts: {action.attempts || 0}</span>
+                  {action.completed_at && <span>Completed: {new Date(action.completed_at).toLocaleTimeString()}</span>}
+                  {action.last_error && <span className="text-red-400">Error: {action.last_error}</span>}
+                </div>
+                {action.rollback_result && (
+                  <div className="rounded border border-emerald-500/10 bg-emerald-500/5 p-2 text-[9px] text-emerald-300 leading-normal">
+                    Rollback: {action.rollback_result.details || action.rollback_result.status}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {rollback && (
+        <div className="rounded border border-slate-800 bg-slate-950/50 p-2.5 text-[10px] space-y-1">
+          <div className="flex items-center gap-2 text-slate-300 font-bold">
+            {(rollback.rollback_failed || 0) > 0 ? (
+              <XCircle className="w-3.5 h-3.5 text-red-400" />
+            ) : (
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+            )}
+            <span>Rollback Result</span>
+          </div>
+          <p className="text-slate-500">
+            {rollback.rollback_successful || 0} succeeded, {rollback.rollback_failed || 0} failed.
+          </p>
+        </div>
+      )}
+
+      {workflow?.error_message && (
+        <div className="rounded border border-red-500/20 bg-red-500/10 p-2 text-[10px] text-red-300">
+          {workflow.error_message}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function AgentPage() {
@@ -541,8 +727,22 @@ export default function AgentPage() {
                   {workflows.map((wf) => {
                     const isCompleted = wf.execution_status === "COMPLETED";
                     const isPaused = wf.execution_status === "PAUSED";
+                    const isSelected = selectedResult?.workflow_id === wf.workflow_id;
+                    const remediationActionCount = getRemediationActions(wf).length;
                     return (
-                      <div key={wf.id} className="p-4 rounded-xl border border-slate-800 bg-[#0c0c12]/40 space-y-3">
+                      <button
+                        key={wf.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedResult(wf);
+                          setShowRawJson(false);
+                        }}
+                        className={`w-full text-left p-4 rounded-xl border bg-[#0c0c12]/40 space-y-3 transition cursor-pointer ${
+                          isSelected
+                            ? "border-indigo-500/60 shadow-[0_0_0_1px_rgba(99,102,241,0.25)]"
+                            : "border-slate-800 hover:border-slate-700"
+                        }`}
+                      >
                         <div className="flex justify-between items-start">
                           <div>
                             <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
@@ -588,7 +788,22 @@ export default function AgentPage() {
                             </span>
                           </div>
                         </div>
-                      </div>
+                        {(wf.remediation_state || remediationActionCount > 0 || wf.error_message) && (
+                          <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-850/60">
+                            <span className={`px-2 py-0.5 rounded-full border text-[9px] font-black uppercase ${getActionStatusClass(wf.remediation_state || "PENDING")}`}>
+                              {formatStateLabel(wf.remediation_state || "NOT_STARTED")}
+                            </span>
+                            <span className="text-[10px] text-slate-500">
+                              {remediationActionCount} action{remediationActionCount === 1 ? "" : "s"}
+                            </span>
+                            {typeof wf.retry_count === "number" && wf.retry_count > 0 && (
+                              <span className="text-[10px] text-amber-400">
+                                {wf.retry_count} retr{wf.retry_count === 1 ? "y" : "ies"}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </button>
                     );
                   })}
                 </div>
@@ -776,40 +991,11 @@ export default function AgentPage() {
                   )}
                 </div>
 
-                {/* Execution History */}
+                {/* Remediation Timeline */}
                 <div className="space-y-2">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Execution History</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Remediation Timeline</div>
                   <div className="p-3 rounded-xl border border-slate-800 bg-[#07070a] space-y-2.5">
-                    {selectedResult.execution_result && selectedResult.execution_result.details ? (
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center text-[10px] border-b border-slate-850 pb-1.5">
-                          <span className="text-slate-500">Remediation Executed</span>
-                          <span className="text-emerald-400 font-bold">
-                            {selectedResult.execution_result.actions_successful}/{selectedResult.execution_result.actions_executed} Successful
-                          </span>
-                        </div>
-                        {selectedResult.execution_result.details.map((det: any, idx: number) => (
-                          <div key={idx} className="text-[10px] space-y-1">
-                            <div className="flex justify-between">
-                              <span className="font-bold text-slate-300">{det.connector} - {det.control}</span>
-                              <span className={det.status === "success" ? "text-emerald-400 animate-pulse" : "text-red-400"}>
-                                {det.status}
-                              </span>
-                            </div>
-                            <p className="text-slate-500 font-mono text-[9px]">{det.details}</p>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="space-y-2 text-[10px] text-slate-400">
-                        <p>• Initial scan completed.</p>
-                        {selectedResult.approval_id ? (
-                          <p className="text-amber-400 animate-pulse">• Awaiting approval (Linked Approval ID: {selectedResult.approval_id})</p>
-                        ) : (
-                          <p>• No remediation has been applied yet.</p>
-                        )}
-                      </div>
-                    )}
+                    <RemediationTimeline workflow={selectedResult} />
                   </div>
                 </div>
 

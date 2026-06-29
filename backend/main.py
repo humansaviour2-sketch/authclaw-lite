@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.startup_checks import validate_production_environment
+from app.core.crypto import secret_management_status
 
 validate_production_environment()
 
@@ -79,7 +80,11 @@ app.include_router(findings_router, prefix="/v1/findings", tags=["findings"])
 @app.get("/health")
 def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "service": "authclaw-backend"}
+    return {
+        "status": "healthy",
+        "service": "authclaw-backend",
+        "secret_management": secret_management_status(),
+    }
 
 
 @app.on_event("startup")
