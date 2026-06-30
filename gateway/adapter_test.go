@@ -123,3 +123,64 @@ func TestExtractAndNormalizeGemini(t *testing.T) {
 		t.Errorf("Rebuilt body does not contain redacted content: %s", string(newBodyBytes))
 	}
 }
+
+func TestExtractAndNormalizeCohereV2Chat(t *testing.T) {
+	jsonBody := `{
+		"model": "command-r-plus",
+		"messages": [
+			{"role": "system", "content": "Keep answers concise."},
+			{"role": "user", "content": [{"type": "text", "text": "My email is test@example.com"}]}
+		]
+	}`
+
+	req, _ := http.NewRequest("POST", "/v2/chat", strings.NewReader(jsonBody))
+	normalized, rebuilder, err := ExtractAndNormalize(req, "cohere")
+	if err != nil {
+		t.Fatalf("Failed to normalize Cohere request: %v", err)
+	}
+	if normalized.Model != "command-r-plus" {
+		t.Fatalf("Expected model command-r-plus, got %s", normalized.Model)
+	}
+	if len(normalized.Prompts) != 2 {
+		t.Fatalf("Expected 2 prompts, got %d", len(normalized.Prompts))
+	}
+	if normalized.Prompts[1] != "My email is test@example.com" {
+		t.Fatalf("Expected Cohere text block prompt, got %q", normalized.Prompts[1])
+	}
+
+	newBodyBytes, err := rebuilder([]string{"Keep answers concise.", "My email is [REDACTED]"})
+	if err != nil {
+		t.Fatalf("Failed to rebuild Cohere request: %v", err)
+	}
+	if !strings.Contains(string(newBodyBytes), "[REDACTED]") {
+		t.Errorf("Rebuilt Cohere body does not contain redacted content: %s", string(newBodyBytes))
+	}
+}
+
+func TestExtractAndNormalizeAzureOpenAIUsesDeploymentWhenModelMissing(t *testing.T) {
+	jsonBody := `{
+		"messages": [
+			{"role": "user", "content": "My phone number is 555-123-4567"}
+		]
+	}`
+
+	req, _ := http.NewRequest("POST", "/openai/deployments/customer-gpt4/chat/completions", strings.NewReader(jsonBody))
+	normalized, rebuilder, err := ExtractAndNormalize(req, "azure_openai")
+	if err != nil {
+		t.Fatalf("Failed to normalize Azure OpenAI request: %v", err)
+	}
+	if normalized.Model != "customer-gpt4" {
+		t.Fatalf("Expected deployment model customer-gpt4, got %s", normalized.Model)
+	}
+	if len(normalized.Prompts) != 1 || normalized.Prompts[0] != "My phone number is 555-123-4567" {
+		t.Fatalf("Unexpected prompts: %#v", normalized.Prompts)
+	}
+
+	newBodyBytes, err := rebuilder([]string{"My phone number is [REDACTED]"})
+	if err != nil {
+		t.Fatalf("Failed to rebuild Azure OpenAI request: %v", err)
+	}
+	if !strings.Contains(string(newBodyBytes), "[REDACTED]") {
+		t.Errorf("Rebuilt Azure OpenAI body does not contain redacted content: %s", string(newBodyBytes))
+	}
+}

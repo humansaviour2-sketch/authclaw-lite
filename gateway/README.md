@@ -9,6 +9,20 @@ The AuthClaw Gateway is a high-performance Go-based reverse proxy that intercept
 - **Dynamic Routing**: Re-writes request headers and URLs to proxy the requests transparently to downstream endpoints.
 - **Audit Logging**: Emits traffic events (including latency, prompt metrics, and status code) to stdout as a stub for the Kafka backbone.
 
+## Provider Compatibility
+
+| Provider | Gateway route | Upstream auth injection | Streaming format |
+| --- | --- | --- | --- |
+| OpenAI | `/v1/chat/completions` | `Authorization: Bearer <provider key>` | OpenAI `data:` chat deltas |
+| Anthropic | `/v1/messages` | `x-api-key` plus `anthropic-version` | Anthropic `content_block_delta` events |
+| Cohere | `/v2/chat` | `Authorization: Bearer <provider key>` | Cohere `content-delta` events |
+| Azure OpenAI | `/v1/chat/completions` with `X-Provider: azure_openai`, backed by a deployment-scoped endpoint, or direct `/openai/deployments/.../chat/completions` | `api-key` plus `api-version` query | OpenAI-compatible chat deltas |
+| Gemini | `/v1/models/{model}:generateContent` | `x-goog-api-key` plus `key` query | Gemini candidate part deltas |
+
+For Azure OpenAI, save the provider credential endpoint as the deployment-scoped URL, for example
+`https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT/chat/completions`.
+Set `AZURE_OPENAI_API_VERSION` to override the default `2024-10-21` query parameter.
+
 ---
 
 ## 🚀 Running Locally

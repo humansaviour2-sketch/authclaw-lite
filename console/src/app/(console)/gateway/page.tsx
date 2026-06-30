@@ -147,7 +147,7 @@ export default function GatewayPage() {
       setEndpoint("https://api.anthropic.com/v1/messages");
       setWhitelistInput("claude-3-5-sonnet, claude-3-opus, claude-3-haiku");
     } else if (prov === "cohere") {
-      setEndpoint("https://api.cohere.ai/v1/chat");
+      setEndpoint("https://api.cohere.ai/v2/chat");
       setWhitelistInput("command-r-plus, command-r");
     } else if (prov === "azure_openai") {
       setEndpoint("https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT/chat/completions");

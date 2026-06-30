@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { sessionStore } from "@/lib/session-store";
 
-type Provider = "openai" | "anthropic" | "cohere" | "gemini";
+type Provider = "openai" | "anthropic" | "cohere" | "azure_openai" | "gemini";
 
 interface ProviderCredential {
   provider: string;
@@ -20,6 +20,7 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   openai: "OpenAI",
   anthropic: "Anthropic",
   cohere: "Cohere",
+  azure_openai: "Azure OpenAI",
   gemini: "Gemini",
 };
 
@@ -50,10 +51,27 @@ const TESTS: Record<Provider, { path: string; body: unknown }> = {
     },
   },
   cohere: {
-    path: "/v1/chat",
+    path: "/v2/chat",
     body: {
       model: "command-r",
-      message: "My email is jane@example.com. Reply with one short safe sentence.",
+      messages: [
+        {
+          role: "user",
+          content: "My email is jane@example.com. Reply with one short safe sentence.",
+        },
+      ],
+    },
+  },
+  azure_openai: {
+    path: "/v1/chat/completions",
+    body: {
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "user",
+          content: "My email is jane@example.com. Reply with one short safe sentence.",
+        },
+      ],
     },
   },
   gemini: {

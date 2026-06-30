@@ -1129,6 +1129,71 @@ func rewriteGeminiText(data map[string]interface{}, transform func(string) strin
 	return rewritten
 }
 
+func rewriteNestedString(data map[string]interface{}, path []string, transform func(string) string) bool {
+	current := data
+	for _, key := range path[:len(path)-1] {
+		next, ok := current[key].(map[string]interface{})
+		if !ok {
+			return false
+		}
+		current = next
+	}
+	return rewriteMapString(current, path[len(path)-1], transform)
+}
+
+func rewriteTextBlocks(rawBlocks interface{}, transform func(string) string) bool {
+	blocks, ok := rawBlocks.([]interface{})
+	if !ok {
+		return false
+	}
+	rewritten := false
+	for _, rawBlock := range blocks {
+		block, ok := rawBlock.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if rewriteMapString(block, "text", transform) {
+			rewritten = true
+		}
+	}
+	return rewritten
+}
+
+func rewriteCohereText(data map[string]interface{}, transform func(string) string) bool {
+	rewritten := false
+	if rewriteMapString(data, "text", transform) {
+		rewritten = true
+	}
+	if rewriteMapString(data, "message", transform) {
+		rewritten = true
+	}
+	if rewriteMapString(data, "response", transform) {
+		rewritten = true
+	}
+	if rewriteNestedString(data, []string{"delta", "text"}, transform) {
+		rewritten = true
+	}
+	if rewriteNestedString(data, []string{"delta", "message", "content", "text"}, transform) {
+		rewritten = true
+	}
+	if delta, ok := data["delta"].(map[string]interface{}); ok {
+		if message, ok := delta["message"].(map[string]interface{}); ok {
+			if rewriteTextBlocks(message["content"], transform) {
+				rewritten = true
+			}
+		}
+	}
+	if message, ok := data["message"].(map[string]interface{}); ok {
+		if rewriteMapString(message, "content", transform) {
+			rewritten = true
+		}
+		if rewriteTextBlocks(message["content"], transform) {
+			rewritten = true
+		}
+	}
+	return rewritten
+}
+
 func rewriteDeltaText(chunk []byte, provider string, transform func(string) string) ([]byte, bool, error) {
 	var data map[string]interface{}
 	if err := json.Unmarshal(chunk, &data); err != nil {
@@ -1137,10 +1202,12 @@ func rewriteDeltaText(chunk []byte, provider string, transform func(string) stri
 
 	rewritten := false
 	switch strings.ToLower(provider) {
-	case "openai":
+	case "openai", "azure_openai":
 		rewritten = rewriteOpenAIText(data, transform)
 	case "anthropic":
 		rewritten = rewriteAnthropicText(data, transform)
+	case "cohere":
+		rewritten = rewriteCohereText(data, transform)
 	case "gemini":
 		rewritten = rewriteGeminiText(data, transform)
 	}
@@ -1201,7 +1268,7 @@ func splitSSEDataLine(line string) (prefix string, payload string, ok bool) {
 func syntheticDeltaPayload(provider string, text string) []byte {
 	var data map[string]interface{}
 	switch strings.ToLower(provider) {
-	case "openai":
+	case "openai", "azure_openai":
 		data = map[string]interface{}{
 			"choices": []interface{}{
 				map[string]interface{}{
@@ -1220,6 +1287,18 @@ func syntheticDeltaPayload(provider string, text string) []byte {
 				map[string]interface{}{
 					"content": map[string]interface{}{
 						"parts": []interface{}{map[string]interface{}{"text": text}},
+					},
+				},
+			},
+		}
+	case "cohere":
+		data = map[string]interface{}{
+			"type": "content-delta",
+			"delta": map[string]interface{}{
+				"message": map[string]interface{}{
+					"content": map[string]interface{}{
+						"type": "text",
+						"text": text,
 					},
 				},
 			},

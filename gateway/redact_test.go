@@ -147,6 +147,53 @@ func TestStreamingReversalReaderGeminiSSE(t *testing.T) {
 	}
 }
 
+func TestStreamingReversalReaderAzureOpenAISSE(t *testing.T) {
+	tokenMap := map[string]string{"[REDACTED_EMAIL_123]": "alice@example.com"}
+	body := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"Email [REDA"}}]}`,
+		`data: {"choices":[{"delta":{"content":"CTED_EMAIL_123]"}}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	reversed, err := io.ReadAll(NewStreamingReversalReader(io.NopCloser(strings.NewReader(body)), tokenMap, "azure_openai"))
+	if err != nil {
+		t.Fatalf("read azure openai stream: %v", err)
+	}
+	out := string(reversed)
+	if !strings.Contains(out, "alice@example.com") || strings.Contains(out, "[REDACTED_EMAIL_123]") {
+		t.Fatalf("azure openai stream was not reversed correctly: %s", out)
+	}
+	if !strings.Contains(out, "data: [DONE]") {
+		t.Fatalf("azure openai stream lost DONE sentinel: %s", out)
+	}
+}
+
+func TestStreamingReversalReaderCohereSSE(t *testing.T) {
+	tokenMap := map[string]string{"[REDACTED_EMAIL_123]": "alice@example.com"}
+	body := strings.Join([]string{
+		`event: content-delta`,
+		`data: {"type":"content-delta","delta":{"message":{"content":{"type":"text","text":"Email [REDA"}}}}`,
+		`event: content-delta`,
+		`data: {"type":"content-delta","delta":{"message":{"content":{"type":"text","text":"CTED_EMAIL_123]"}}}}`,
+		`event: stream-end`,
+		`data: {"type":"stream-end","finish_reason":"COMPLETE"}`,
+		"",
+	}, "\n")
+
+	reversed, err := io.ReadAll(NewStreamingReversalReader(io.NopCloser(strings.NewReader(body)), tokenMap, "cohere"))
+	if err != nil {
+		t.Fatalf("read cohere stream: %v", err)
+	}
+	out := string(reversed)
+	if !strings.Contains(out, "alice@example.com") || strings.Contains(out, "[REDACTED_EMAIL_123]") {
+		t.Fatalf("cohere stream was not reversed correctly: %s", out)
+	}
+	if !strings.Contains(out, "event: content-delta") || !strings.Contains(out, "event: stream-end") {
+		t.Fatalf("cohere event lines were not preserved: %s", out)
+	}
+}
+
 func TestAnalyzePromptWithFallbackTimesOutUnderConcurrency(t *testing.T) {
 	slowAnalyzer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(250 * time.Millisecond)
