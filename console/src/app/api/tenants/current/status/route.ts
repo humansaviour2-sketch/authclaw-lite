@@ -9,7 +9,7 @@ export async function PATCH(request: Request) {
       body: JSON.stringify(body),
     });
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }

@@ -5,15 +5,12 @@ import {
   Bot, 
   Send, 
   ShieldCheck, 
-  Cpu, 
   AlertTriangle, 
   CheckCircle2, 
   XCircle, 
   X,
-  Play, 
   User, 
   Sparkles,
-  Layers,
   KeyRound,
   Lock,
   Loader2,
@@ -32,8 +29,8 @@ interface Workflow {
   current_state: string;
   execution_status: string;
   risk_score: number | null;
-  findings?: Record<string, unknown>[];
-  remediation_plan?: Record<string, unknown>[];
+  findings?: Finding[];
+  remediation_plan?: RemediationPlan[];
   remediation_state?: string | null;
   remediation_actions?: RemediationAction[];
   rollback_result?: RollbackResult | null;
@@ -60,7 +57,33 @@ interface Message {
   sender: "user" | "agent";
   text: string;
   timestamp: Date;
-  results?: any;
+  results?: AgentResult;
+}
+
+interface ChatSession {
+  id: string;
+  title: string;
+}
+
+interface ChatHistoryMessage {
+  sender: "user" | "agent";
+  text: string;
+  timestamp: string;
+  results?: AgentResult;
+}
+
+interface Finding {
+  control?: string;
+  status?: string;
+  description?: string;
+  evidence?: string;
+}
+
+interface RemediationPlan {
+  action?: string;
+  priority?: string;
+  finding_control?: string;
+  estimated_effort?: string;
 }
 
 interface RAGCitation {
@@ -76,6 +99,16 @@ interface RAGCitation {
 
 interface RAGChunk extends RAGCitation {
   text: string;
+}
+
+interface RAGAnswerResult {
+  type: "rag_answer";
+  question: string;
+  corpus_version?: string | null;
+  corpus_checksum?: string | null;
+  grounded: boolean;
+  citations: RAGCitation[];
+  retrieved_chunks: RAGChunk[];
 }
 
 interface RemediationAction {
@@ -115,6 +148,18 @@ interface WorkflowStateData {
 
 type WorkflowInspection = Partial<Workflow> & {
   workflow_id?: string;
+};
+
+type AgentResult = WorkflowInspection | RAGAnswerResult;
+
+const errorMessage = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
+
+const isRagResult = (result?: AgentResult | null): result is RAGAnswerResult => {
+  return Boolean(result && "type" in result && result.type === "rag_answer");
+};
+
+const isWorkflowResult = (result?: AgentResult | null): result is WorkflowInspection => {
+  return Boolean(result && "workflow_id" in result && result.workflow_id);
 };
 
 const formatStateLabel = (value?: string | null) => {
@@ -260,10 +305,9 @@ export default function AgentPage() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [loading, setLoading] = useState(true);
-  const [triggeringScan, setTriggeringScan] = useState(false);
 
   // Chat Sessions States
-  const [sessions, setSessions] = useState<any[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionsLoading, setSessionsLoading] = useState(false);
 
@@ -277,7 +321,7 @@ export default function AgentPage() {
   ]);
   const [input, setInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
-  const [selectedResult, setSelectedResult] = useState<any>(null);
+  const [selectedResult, setSelectedResult] = useState<AgentResult | null>(null);
   const [showRawJson, setShowRawJson] = useState(false);
   const [remediating, setRemediating] = useState(false);
 
@@ -306,8 +350,8 @@ export default function AgentPage() {
       const updatedWorkflow = await res.json();
       setSelectedResult(updatedWorkflow);
       await fetchWorkflowsAndApprovals();
-    } catch (err: any) {
-      alert(err.message || "Error starting remediation");
+    } catch (err: unknown) {
+      alert(errorMessage(err, "Error starting remediation"));
     } finally {
       setRemediating(false);
     }
@@ -324,8 +368,8 @@ export default function AgentPage() {
       const data = await res.json();
       setWorkflows(data.workflows || []);
       setApprovals(data.approvals || []);
-    } catch (err: any) {
-      console.warn("Agent fetchWorkflowsAndApprovals failed:", err.message);
+    } catch (err: unknown) {
+      console.warn("Agent fetchWorkflowsAndApprovals failed:", errorMessage(err, "Unknown error"));
     } finally {
       setLoading(false);
     }
@@ -341,8 +385,8 @@ export default function AgentPage() {
       if (autoSelect && data && data.length > 0) {
         setActiveSessionId(data[0].id);
       }
-    } catch (err: any) {
-      console.warn("fetchSessions failed:", err.message);
+    } catch (err: unknown) {
+      console.warn("fetchSessions failed:", errorMessage(err, "Unknown error"));
     } finally {
       setSessionsLoading(false);
     }
@@ -355,7 +399,7 @@ export default function AgentPage() {
       if (!res.ok) throw new Error("Failed to load message history");
       const data = await res.json();
       if (data && data.length > 0) {
-        setMessages(data.map((m: any) => ({
+        setMessages((data as ChatHistoryMessage[]).map((m) => ({
           sender: m.sender,
           text: m.text,
           timestamp: new Date(m.timestamp),
@@ -370,8 +414,8 @@ export default function AgentPage() {
           }
         ]);
       }
-    } catch (err: any) {
-      console.warn("fetchSessionHistory failed:", err.message);
+    } catch (err: unknown) {
+      console.warn("fetchSessionHistory failed:", errorMessage(err, "Unknown error"));
     } finally {
       setChatLoading(false);
     }
@@ -412,32 +456,8 @@ export default function AgentPage() {
           timestamp: new Date()
         }
       ]);
-    } catch (err: any) {
-      alert(err.message || "Error creating new chat");
-    }
-  };
-
-  const triggerScan = async (framework: string) => {
-    setTriggeringScan(true);
-    try {
-      const res = await fetch("/api/workflows", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ framework }),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "Failed to start workflow");
-      }
-
-      const newScan = await res.json();
-      await fetchWorkflowsAndApprovals();
-      return newScan;
-    } catch (err: any) {
-      throw err;
-    } finally {
-      setTriggeringScan(false);
+    } catch (err: unknown) {
+      alert(errorMessage(err, "Error creating new chat"));
     }
   };
 
@@ -459,8 +479,8 @@ export default function AgentPage() {
         sessionId = newSession.id;
         setActiveSessionId(newSession.id);
         setSessions((prev) => [newSession, ...prev]);
-      } catch (err: any) {
-        alert(err.message || "Could not start new chat session");
+      } catch (err: unknown) {
+        alert(errorMessage(err, "Could not start new chat session"));
         return;
       }
     }
@@ -483,9 +503,9 @@ export default function AgentPage() {
       }
 
       const data = await res.json();
-      let responseText = data.text || "No response received.";
-      let resultsData = data.results || null;
-      let newTitle = data.session_title;
+      const responseText = data.text || "No response received.";
+      const resultsData = data.results || null;
+      const newTitle = data.session_title;
 
       setMessages((prev) => [
         ...prev, 
@@ -504,10 +524,10 @@ export default function AgentPage() {
       }
 
       await fetchWorkflowsAndApprovals();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setMessages((prev) => [
         ...prev, 
-        { sender: "agent", text: `Failed to execute request: ${err.message}`, timestamp: new Date() }
+        { sender: "agent", text: `Failed to execute request: ${errorMessage(err, "Unknown error")}`, timestamp: new Date() }
       ]);
     } finally {
       setChatLoading(false);
@@ -550,8 +570,8 @@ export default function AgentPage() {
       setShowMfaInput(false);
       setSelectedApproval(null);
       await fetchWorkflowsAndApprovals();
-    } catch (err: any) {
-      setMfaError(err.message || "Could not authorize action");
+    } catch (err: unknown) {
+      setMfaError(errorMessage(err, "Could not authorize action"));
     } finally {
       setApproving(false);
     }
@@ -573,8 +593,8 @@ export default function AgentPage() {
       }
 
       await fetchWorkflowsAndApprovals();
-    } catch (err: any) {
-      alert(err.message || "Error rejecting approval");
+    } catch (err: unknown) {
+      alert(errorMessage(err, "Error rejecting approval"));
     }
   };
 
@@ -693,7 +713,7 @@ export default function AgentPage() {
                           : "bg-slate-850/40 border border-slate-800 text-slate-300 rounded-tl-none"
                       }`}>
                         <pre className="whitespace-pre-wrap font-sans">{msg.text}</pre>
-                        {msg.results?.type === "rag_answer" && msg.results.citations?.length > 0 && (
+                        {isRagResult(msg.results) && msg.results.citations.length > 0 && (
                           <div className="mt-3 space-y-1.5">
                             <div className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Grounding Evidence</div>
                             {msg.results.citations.slice(0, 3).map((citation: RAGCitation) => (
@@ -716,10 +736,12 @@ export default function AgentPage() {
                         )}
                         {msg.results && (
                           <button
-                            onClick={() => setSelectedResult(msg.results)}
+                            onClick={() => {
+                              if (msg.results) setSelectedResult(msg.results);
+                            }}
                             className="mt-2 text-[10px] font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 underline transition cursor-pointer"
                           >
-                            {msg.results.type === "rag_answer" ? "View RAG Evidence" : "View Results JSON"}
+                            {isRagResult(msg.results) ? "View RAG Evidence" : "View Results JSON"}
                           </button>
                         )}
                       </div>
@@ -765,7 +787,7 @@ export default function AgentPage() {
                   {workflows.map((wf) => {
                     const isCompleted = wf.execution_status === "COMPLETED";
                     const isPaused = wf.execution_status === "PAUSED";
-                    const isSelected = selectedResult?.workflow_id === wf.workflow_id;
+                    const isSelected = isWorkflowResult(selectedResult) && selectedResult.workflow_id === wf.workflow_id;
                     const remediationActionCount = getRemediationActions(wf).length;
                     return (
                       <button
@@ -915,7 +937,7 @@ export default function AgentPage() {
                 <Terminal className="w-4 h-4 text-indigo-400" />
                 Inspector Details Panel
               </div>
-              {(selectedResult?.workflow_id || selectedResult?.type === "rag_answer") && (
+              {(isWorkflowResult(selectedResult) || isRagResult(selectedResult)) && (
                 <button
                   onClick={() => setShowRawJson(!showRawJson)}
                   className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider rounded border border-slate-800 bg-[#0c0c12] hover:bg-slate-800/80 text-slate-400 hover:text-slate-200 transition cursor-pointer"
@@ -925,7 +947,7 @@ export default function AgentPage() {
               )}
             </div>
             
-            {selectedResult?.type === "rag_answer" && !showRawJson ? (
+            {isRagResult(selectedResult) && !showRawJson ? (
               <div className="space-y-4 text-xs max-h-[450px] overflow-y-auto pr-1">
                 <div className="p-3.5 rounded-xl border border-slate-800 bg-[#0c0c12]/40 space-y-2">
                   <div className="flex justify-between items-center">
@@ -994,7 +1016,7 @@ export default function AgentPage() {
                   ))}
                 </div>
               </div>
-            ) : selectedResult && selectedResult.workflow_id && !showRawJson ? (
+            ) : isWorkflowResult(selectedResult) && !showRawJson ? (
               <div className="space-y-4 text-xs max-h-[450px] overflow-y-auto pr-1">
                 {/* Scan Summary */}
                 <div className="p-3.5 rounded-xl border border-slate-800 bg-[#0c0c12]/40 space-y-2">
@@ -1017,8 +1039,8 @@ export default function AgentPage() {
                     </div>
                     <div>
                       <p className="text-slate-550 text-[9px] font-bold">RISK SCORE</p>
-                      <p className={`font-semibold ${selectedResult.risk_score > 0.5 ? "text-red-400" : "text-emerald-400"}`}>
-                        {selectedResult.risk_score !== null ? `${(selectedResult.risk_score * 100).toFixed(0)}%` : "N/A"}
+                      <p className={`font-semibold ${(selectedResult.risk_score ?? 0) > 0.5 ? "text-red-400" : "text-emerald-400"}`}>
+                        {selectedResult.risk_score != null ? `${(selectedResult.risk_score * 100).toFixed(0)}%` : "N/A"}
                       </p>
                     </div>
                     <div>
@@ -1043,7 +1065,7 @@ export default function AgentPage() {
                     <div className="text-slate-500 italic p-3 rounded-xl border border-slate-850 bg-[#07070a] text-center">No compliance violations found.</div>
                   ) : (
                     <div className="space-y-2">
-                      {selectedResult.findings.map((finding: any, idx: number) => (
+                      {selectedResult.findings.map((finding: Finding, idx: number) => (
                         <div key={idx} className="p-3 rounded-xl border border-slate-800 bg-[#07070a] space-y-1.5">
                           <div className="flex justify-between items-center">
                             <span className="font-mono text-slate-200 font-bold">{finding.control}</span>
@@ -1072,7 +1094,7 @@ export default function AgentPage() {
                     <div className="text-slate-500 italic p-3 rounded-xl border border-slate-850 bg-[#07070a] text-center">No remediation actions needed.</div>
                   ) : (
                     <div className="space-y-2">
-                      {selectedResult.remediation_plan.map((plan: any, idx: number) => (
+                      {selectedResult.remediation_plan.map((plan: RemediationPlan, idx: number) => (
                         <div key={idx} className="p-3 rounded-xl border border-slate-800 bg-[#07070a] space-y-2">
                           <div className="flex justify-between items-center">
                             <span className="font-bold text-slate-300">{plan.action}</span>
@@ -1107,9 +1129,9 @@ export default function AgentPage() {
                 </div>
 
                 {/* Apply Remediation Button (Explicit Workflow ID) */}
-                {selectedResult.execution_status === "COMPLETED" && selectedResult.current_state === "COMPLETE" && selectedResult.remediation_plan?.length > 0 && (
+                {selectedResult.execution_status === "COMPLETED" && selectedResult.current_state === "COMPLETE" && (selectedResult.remediation_plan?.length ?? 0) > 0 && (
                   <button
-                    onClick={() => handleRemediate(selectedResult.workflow_id)}
+                    onClick={() => handleRemediate(selectedResult.workflow_id || "")}
                     disabled={remediating}
                     className="w-full py-2 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg transition active:scale-[0.98] disabled:opacity-50 mt-4 flex items-center justify-center gap-1.5 cursor-pointer"
                   >

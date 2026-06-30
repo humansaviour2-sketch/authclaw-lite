@@ -4,7 +4,6 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   DatabaseZap,
   RefreshCw,
-  Search,
   ChevronLeft,
   ChevronRight,
   X,
@@ -15,12 +14,10 @@ import {
   Link2,
   Clock,
   Filter,
-  ExternalLink,
   ChevronDown,
   AlertCircle,
   CheckCircle2,
   Info,
-  Zap,
 } from "lucide-react";
 import { useSearchParams, useRouter } from "next/navigation";
 
@@ -351,7 +348,10 @@ export default function EvidencePage() {
   }, [framework, evidenceType, severity, page]);
 
   useEffect(() => {
-    fetchEvidence();
+    const timer = window.setTimeout(() => {
+      void fetchEvidence();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [fetchEvidence]);
 
   useEffect(() => {
@@ -368,11 +368,6 @@ export default function EvidencePage() {
         .catch(err => console.error("Failed to load evidence drawer", err));
     }
   }, [searchParams, selectedRecord]);
-
-  // Reset to page 1 when filters change
-  useEffect(() => {
-    setPage(1);
-  }, [framework, evidenceType, severity]);
 
   const totalPages = Math.ceil(total / pageSize);
   const hasFilters = !!(framework || evidenceType || severity);
@@ -420,19 +415,28 @@ export default function EvidencePage() {
           label="All Frameworks"
           value={framework}
           options={FRAMEWORK_OPTIONS}
-          onChange={setFramework}
+          onChange={(value) => {
+            setFramework(value);
+            setPage(1);
+          }}
         />
         <FilterSelect
           label="All Types"
           value={evidenceType}
           options={EVIDENCE_TYPE_OPTIONS}
-          onChange={setEvidenceType}
+          onChange={(value) => {
+            setEvidenceType(value);
+            setPage(1);
+          }}
         />
         <FilterSelect
           label="All Severities"
           value={severity}
           options={SEVERITY_OPTIONS}
-          onChange={setSeverity}
+          onChange={(value) => {
+            setSeverity(value);
+            setPage(1);
+          }}
         />
 
         {hasFilters && (
@@ -441,6 +445,7 @@ export default function EvidencePage() {
               setFramework("");
               setEvidenceType("");
               setSeverity("");
+              setPage(1);
             }}
             className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs text-red-400 hover:bg-red-500/10 border border-red-500/20 transition-colors"
           >
@@ -508,7 +513,12 @@ export default function EvidencePage() {
             </p>
             {hasFilters && (
               <button
-                onClick={() => { setFramework(""); setEvidenceType(""); setSeverity(""); }}
+                onClick={() => {
+                  setFramework("");
+                  setEvidenceType("");
+                  setSeverity("");
+                  setPage(1);
+                }}
                 className="mt-4 px-4 py-2 rounded-lg text-xs font-medium text-indigo-400 bg-indigo-600/10 border border-indigo-500/20 hover:bg-indigo-600/20 transition-colors"
               >
                 Clear filters

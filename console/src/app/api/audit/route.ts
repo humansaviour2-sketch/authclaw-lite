@@ -20,7 +20,7 @@ export async function GET(request: Request) {
 
     const data = await backendFetch("/v1/audit-logs", { params });
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }

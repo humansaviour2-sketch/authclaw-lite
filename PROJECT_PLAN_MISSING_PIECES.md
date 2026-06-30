@@ -2,19 +2,33 @@
 
 Source reviewed: `C:\Users\WIN10\Downloads\AuthClaw_Project_Plan.pdf`
 
-Date: 2026-06-29
+Date: 2026-06-30
 
 This checklist maps the project plan epics and exit criteria against the current AuthClaw repo state. It focuses on what is still missing or only partially complete for the full MVP described in the plan.
 
 ## Executive Summary
 
-AuthClaw now has meaningful coverage for the gateway, redaction, HITL, remediation state machine, audit hash-chain, secret envelopes, Terraform baseline, and multi-region RDS standby design. The remaining gaps are concentrated in five areas:
+AuthClaw now has meaningful coverage for the gateway, provider adapters, streaming redaction, HITL, remediation state machine with rollback, audit hash-chain, ClickHouse audit analytics, Kafka event backbone, auth/API-key lifecycle, secret envelopes, Terraform baseline, regulatory RAG, and multi-region RDS standby design. The remaining gaps are concentrated in five areas:
 
-1. Production-grade policy enforcement and validation.
-2. Full provider coverage and contract testing.
-3. RAG, scoped ephemeral workers, and cloud/SCM connectors beyond the current AWS path.
-4. ClickHouse/Kafka/audit export hardening.
+1. Scoped ephemeral workers and cloud/SCM connectors beyond the current AWS path.
+2. Signed/verifiable audit export and auditor Trust Center workflows.
+3. CI/CD security gates and staging/prod promotion proof.
+4. Enterprise auth/SSO, full RBAC administration, and tenant administration polish.
 5. Phase 4 hardening: latency proof, red-team harness, pentest, HA drills, SOC 2 evidence automation.
+
+## Completed Since Original Review
+
+- HITL expiry aligned to the 30-minute SRS default across gateway policy, starter YAML, UI defaults, and tests.
+- Streaming redaction hardened for flush behavior, chunk boundaries, provider SSE formats, and reduced buffering.
+- Heavy benchmark profile and NFR p95/p99 thresholds established for the stable local profile.
+- Policy enforcement hardened with YAML validation, dry-run/simulation, explainability, activation, and rollback.
+- Provider coverage expanded with Cohere and Azure OpenAI adapters, contract tests, streaming format tests, route compatibility checks, and credential-injection tests.
+- Audit store hardened with ClickHouse analytics ingestion, replay/backfill, consistency checks, restricted-write guidance, and broader audit schema coverage.
+- Event backbone added with Kafka topic definitions, DLQ/replay/idempotency semantics, metrics, integration tests, and operations docs.
+- Auth baseline hardened with API-key expiry, rotation, revocation propagation, last-used auditing, scoped enforcement, provider credential rotation, secret-provider runbook, and OIDC/SSO hooks.
+- PII/PHI redaction hardened with custom NER support, strategy coverage, inbound/outbound provider coverage, concurrency stabilization, timeout/fallback metrics, and tenant token retention/purge support.
+- RAG added for GDPR, HIPAA, and SOC 2 with versioned corpus, citation-backed agent answers, retrieval evaluation tests, corpus sync/status/search endpoints, and remediation guardrails tied to retrieved evidence.
+- Console lint hardening completed; `npm.cmd run lint` is now green.
 
 ## Phase 1 - Foundation & Architecture
 
@@ -57,102 +71,140 @@ Missing pieces:
 
 ### E1.4 Gateway Proxy Skeleton
 
-Current status: Partial.
+Current status: Mostly complete.
+
+Completed:
+
+- Native provider adapters are present for OpenAI, Anthropic, Cohere, Azure OpenAI, and Gemini.
+- Provider contract tests cover request/response fidelity for required providers.
+- Streaming contract tests cover provider SSE formats.
+- Route-level model/provider compatibility validation is present.
+- Credential injection tests cover provider-specific upstream credentials.
 
 Missing pieces:
 
-- Complete and verify native provider compatibility for the four project-plan providers: OpenAI, Anthropic, Cohere, Azure OpenAI.
-- Current implementation also includes Gemini; keep it, but it does not replace Cohere/Azure requirements.
-- Add provider contract tests for request/response fidelity for all required providers.
 - Add gRPC support if still required by the gateway ingress plan.
-- Add production upstream credential injection tests per provider.
-- Add route-level model/provider compatibility validation.
+- Run provider contract tests against staging credentials before production sign-off.
 
 ### E1.5 Audit Store
 
-Current status: Partial.
+Current status: Mostly complete.
+
+Completed:
+
+- ClickHouse is wired as the production analytics path while Postgres remains the hash-chain system of record.
+- Replay/backfill from Postgres audit chain into ClickHouse is present.
+- Consistency check/reporting between Postgres chain and ClickHouse copy is present.
+- Append-only/restricted-write ClickHouse migration and operational guidance are present.
+- Audit schema coverage was extended for approvals, remediation action attempts, rollback events, and framework impact.
 
 Missing pieces:
 
-- Make ClickHouse the production high-volume audit analytics path, not just optional infrastructure.
-- Add append-only/restricted-write deployment controls for ClickHouse.
-- Add replay/backfill from Postgres audit chain into ClickHouse.
-- Add consistency checks between Postgres chain of record and ClickHouse analytics copy.
-- Add schema coverage for agent reasoning, approvals, remediation action attempts, and framework impact.
+- Prove ClickHouse retention and restricted-write controls in staging/prod infrastructure.
+- Add large-volume replay timing evidence.
 
 ### E1.6 Event Backbone
 
-Current status: Partial.
+Current status: Mostly complete.
+
+Completed:
+
+- Kafka/MSK topics are defined for gateway traffic, audit events, and audit dead-letter handling.
+- Topic partitioning, retention, replay policy, and tenant keying are documented.
+- Gateway/backend/audit-consumer integration tests cover emit, ClickHouse write, DLQ failure, and replay reconciliation paths.
+- Stable event IDs, duplicate handling, restart safety, and idempotent ClickHouse writes are implemented.
+- Metrics cover publish failures, consumer lag, DLQ count, ClickHouse insert failures, and replay inserted/skipped counts.
+- Operational docs cover setup, retention choices, replay, and failure runbook.
 
 Missing pieces:
 
-- Define production Kafka/MSK topics, partitions, retention, and dead-letter topics.
-- Add producer/consumer integration tests across gateway, backend, and audit consumer.
-- Add retry, idempotency, and replay semantics for audit events.
-- Add operational metrics for publish failures, lag, dropped messages, and consumer restarts.
+- Prove MSK deployment and consumer lag alarms in a real staging AWS account.
 
 ### E1.7 Auth Baseline
 
-Current status: Partial.
+Current status: Partial to strong.
+
+Completed:
+
+- API-key expiry, rotation, revocation propagation, last-used auditing, and scoped enforcement are implemented.
+- Provider credential rotation flow is implemented.
+- Production secret-provider runbook is present.
+- OIDC/SSO extension hooks are present.
 
 Missing pieces:
 
-- Add OIDC/IdP integration.
+- Add full OIDC/IdP integration.
 - Add enterprise SSO configuration UI and tests.
-- Add final production choice and runbook for KMS/Vault secret provider.
-- Add provider credential rotation flow.
-- Add API-key lifecycle hardening: expiry, scopes, rotation, last-used auditing, revocation propagation.
+- Make final production choice for KMS/Vault secret provider and prove it in staging.
 
 ## Phase 2 - Agentic Engine & Guardrails
 
 ### E2.1 PII/PHI Redaction Engine
 
-Current status: Partial to strong.
+Current status: Strong.
+
+Completed:
+
+- Custom NER pipeline support beyond Presidio defaults is present.
+- Redaction strategies are covered: mask, salted hash, synthetic replacement, and reversible tokenization.
+- Inbound prompts and outbound completions are redacted across required providers.
+- Presidio-backed redaction was stabilized for concurrency-10+ paths.
+- Timeout/fallback metrics are explicit.
+- Tenant-specific reversible token retention and purge policy is present.
 
 Missing pieces:
 
-- Add custom NER pipeline support beyond Presidio built-ins and regex recognizers.
-- Prove all three strategies at scale: mask, SHA-256+salt hash, synthetic replacement.
-- Prove redaction for both inbound prompts and outbound completions for all required providers.
-- Finish concurrency-10+ stability work for Presidio-backed redaction.
-- Add explicit fallback metrics when Presidio times out or degrades.
-- Add tenant-specific reversible tokenization retention and purge policy.
+- Add larger staging soak tests with real Presidio latency/failure modes.
 
 ### E2.2 Policy Enforcement
 
-Current status: Partial.
+Current status: Mostly complete.
+
+Completed:
+
+- YAML policy-as-code validator rejects malformed or over-scoped policies before activation.
+- Policy dry-run/simulation endpoint is present.
+- Decision explainability is present for allow/block/require-approval paths.
+- Policy version rollout safety covers draft, validate, activate, and rollback.
+- Console policy page exposes validation, simulation, explanations, validation warnings/errors, activation, and rollback controls.
 
 Missing pieces:
 
-- Add YAML policy-as-code validator that rejects malformed or over-scoped policies before activation.
-- Add policy dry-run/simulation endpoint.
-- Add explainability for allow/block/require-approval decisions.
 - Add topic classification rules beyond regex/model rules.
-- Add policy version rollout safety: draft, validate, activate, rollback.
 - Add OPA bundle build/deploy path for Terraform/ECS.
 
 ### E2.3 Streaming Filter
 
-Current status: Partial to strong.
+Current status: Strong.
+
+Completed:
+
+- Streaming flush behavior was fixed.
+- Chunk-boundary tests cover sensitive-value fragmentation.
+- Provider SSE format support was hardened.
+- Buffering was reduced where possible.
+- Provider-specific streaming contract coverage was added for required providers.
 
 Missing pieces:
 
-- Add provider-specific streaming contract tests for OpenAI, Anthropic, Cohere, Azure OpenAI.
 - Add back-pressure tests under load.
-- Prove no token fragmentation for sensitive values across chunk boundaries.
 - Add latency/throughput benchmarks for streaming redaction with Presidio slow/failure modes.
 
 ### E2.4 Orchestrator + RAG
 
-Current status: Partial.
+Current status: Complete for MVP.
+
+Completed:
+
+- Versioned RAG corpus exists for GDPR, HIPAA, and SOC 2.
+- Agent chat produces citation-backed framework answers.
+- Retrieval evaluation tests cover common framework questions.
+- Corpus sync/status/search endpoints provide update workflow and corpus version reporting.
+- Remediation guidance is guardrailed to retrieved evidence.
 
 Missing pieces:
 
-- Add RAG index over GDPR, HIPAA, and SOC 2 documentation.
-- Add citation-backed framework answers in the agent chat.
-- Add retrieval evaluation tests for framework questions.
-- Add versioning/update workflow for the regulatory corpus.
-- Add guardrails to keep remediation suggestions tied to retrieved evidence.
+- Add larger authoritative corpus expansion and scheduled corpus review/approval process before external auditor use.
 
 ### E2.5 Ephemeral Workers
 
@@ -184,13 +236,18 @@ Missing pieces:
 
 ### E3.1 Console Foundation
 
-Current status: Partial to strong.
+Current status: Strong.
+
+Completed:
+
+- Console lint hardening is complete; `npm.cmd run lint` is green.
+- Production console build passes.
 
 Missing pieces:
 
 - Finish auth integration around real OIDC/IdP, not just local/session flows.
 - Add tenant context tests across all console API routes.
-- Add design-system hardening and accessibility checks.
+- Add accessibility checks.
 
 ### E3.2 Compliance Dashboard & Framework Scoring
 
@@ -205,11 +262,15 @@ Missing pieces:
 
 ### E3.3 Agent Chat + Remediation + Approvals UI
 
-Current status: Partial to strong.
+Current status: Strong.
+
+Completed:
+
+- Chat answers are connected to RAG citations and show grounding evidence in the conversation and inspector panel.
+- Remediation workflows and approvals are visible in the agent UI.
 
 Missing pieces:
 
-- Connect chat answers to RAG citations.
 - Show action-scoped MFA binding and approval audit trail in UI.
 - Add richer remediation diff previews for Terraform/CLI changes.
 - Add approval replay/expiry states in UI tests.
@@ -238,7 +299,11 @@ Missing pieces:
 
 ### E3.6 Tenant Admin
 
-Current status: Partial.
+Current status: Partial to strong.
+
+Completed:
+
+- API-key expiry, rotation, revocation, last-used metadata, and scoped key flows are implemented at the auth/API layer.
 
 Missing pieces:
 
@@ -334,8 +399,7 @@ Missing pieces:
 
 Missing pieces:
 
-- Unit tests for policy validation and provider adapters.
-- Contract tests for OpenAI, Anthropic, Cohere, Azure OpenAI.
+- Broaden unit tests for newly added policy/provider/auth/redaction/RAG edge cases.
 - Integration test for proxy -> redact -> policy -> provider -> audit chain.
 - Streaming tests under load for every required provider.
 - Multi-tenant isolation tests across all scoped tables.
@@ -354,17 +418,16 @@ Missing pieces:
 - Secret rotation runbook.
 - Provider onboarding docs.
 - Policy authoring guide.
-- RAG corpus update guide.
 - DR drill report template.
 - SOC 2 evidence collection guide.
 - Auditor verification guide for cryptographic exports.
 
 ## Recommended Next Work Order
 
-1. Policy enforcement hardening: YAML validator, dry-run, explainability, version activation/rollback.
-2. Provider compatibility: complete Cohere and Azure OpenAI contract coverage.
-3. RAG and regulatory corpus: GDPR/HIPAA/SOC 2 indexed retrieval with citations.
-4. Ephemeral workers: scoped temporary tokens plus GitHub/GCP connector path.
-5. Audit export: signed compliance export and verifier.
-6. Latency and red-team evidence: official NFR benchmark and adversarial harness.
-7. CI/CD hardening: SAST, dependency scan, image build, Terraform plan, benchmark gates.
+1. Ephemeral workers: scoped temporary tokens plus GitHub/GCP connector path.
+2. Cryptographic audit export: signed compliance export and verifier.
+3. Compliance dashboard scoring: live SOC 2/GDPR/HIPAA scoring from evidence and audit records.
+4. CI/CD hardening: SAST, dependency scan, image build, Terraform plan, integration, and benchmark gates.
+5. Latency and red-team evidence: official NFR benchmark and adversarial harness.
+6. HA/resilience proof: staging failover drills, RTO/RPO report, Redis/Kafka/ClickHouse resilience tests.
+7. Enterprise auth/admin: OIDC/SSO UI, RBAC matrix, tenant tier/rate-limit management.

@@ -4,6 +4,18 @@ import { sessionStore } from "./session-store";
 
 const BACKEND_URL = process.env.API_URL || "http://localhost:8000";
 
+type ApiErrorCandidate = {
+  detail?: unknown;
+  message?: unknown;
+  error?: unknown;
+};
+
+type ValidationErrorItem = {
+  path?: unknown;
+  message?: unknown;
+  msg?: unknown;
+};
+
 class BackendRequestError extends Error {
   status: number;
 
@@ -14,15 +26,20 @@ class BackendRequestError extends Error {
   }
 }
 
-function apiErrorMessage(data: any, fallback: string): string {
-  const candidate = data?.detail ?? data?.message ?? data?.error;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object");
+}
+
+function apiErrorMessage(data: unknown, fallback: string): string {
+  if (!isRecord(data)) return fallback;
+  const payload = data as ApiErrorCandidate;
+  const candidate = payload.detail ?? payload.message ?? payload.error;
   if (typeof candidate === "string") return candidate;
-  if (candidate && typeof candidate === "object") {
+  if (isRecord(candidate)) {
     if (typeof candidate.message === "string") {
       const errors = Array.isArray(candidate.errors)
         ? candidate.errors
-            .map((item: any) => {
-              if (!item || typeof item !== "object") return "";
+            .map((item: ValidationErrorItem) => {
               const path = typeof item.path === "string" ? item.path : "policy";
               const message = typeof item.message === "string" ? item.message : "";
               return message ? `${path}: ${message}` : "";
@@ -43,6 +60,14 @@ function apiErrorMessage(data: any, fallback: string): string {
     if (messages.length) return messages.join(" ");
   }
   return fallback;
+}
+
+export function getErrorMessage(error: unknown, fallback = "Request failed"): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+export function getErrorStatus(error: unknown, fallback = 500): number {
+  return isRecord(error) && typeof error.status === "number" ? error.status : fallback;
 }
 
 interface RequestOptions extends RequestInit {
@@ -107,10 +132,11 @@ export async function backendFetch(path: string, options: RequestOptions = {}) {
   return response.json();
 }
 
-export function handleApiError(error: any) {
-  const isUnauthorized = error.message?.includes("Unauthorized");
-  const status = error.status || (isUnauthorized ? 401 : 500);
-  const response = NextResponse.json({ error: error.message }, { status });
+export function handleApiError(error: unknown) {
+  const message = getErrorMessage(error);
+  const isUnauthorized = message.includes("Unauthorized");
+  const status = getErrorStatus(error, isUnauthorized ? 401 : 500);
+  const response = NextResponse.json({ error: message }, { status });
   if (isUnauthorized) {
     response.cookies.delete("authclaw_session");
   }

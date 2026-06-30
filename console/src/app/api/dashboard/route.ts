@@ -6,6 +6,18 @@ import { sessionStore } from "@/lib/session-store";
 
 export const dynamic = "force-dynamic";
 
+interface AuditMetricRecord {
+  duration_ms?: number | null;
+  duration?: number | null;
+  timestamp?: string | null;
+  created_at?: string | null;
+}
+
+interface AuditMetricResponse {
+  total?: number;
+  records?: AuditMetricRecord[];
+}
+
 export async function GET() {
   try {
     const cookieStore = await cookies();
@@ -46,14 +58,14 @@ export async function GET() {
     let totalRequests = 0;
 
     try {
-      const logsData = await backendFetch("/v1/audit-logs?limit=100");
-      if (logsData && logsData.records && logsData.records.length > 0) {
+      const logsData = await backendFetch("/v1/audit-logs?limit=100") as AuditMetricResponse;
+      if (logsData.records && logsData.records.length > 0) {
         totalRequests = logsData.total || logsData.records.length;
         
         // Calculate P99 Latency if duration_ms exists in logs
         const latencies = logsData.records
-          .map((r: any) => r.duration_ms || r.duration)
-          .filter((l: any) => l !== undefined && l !== null)
+          .map((record) => record.duration_ms || record.duration)
+          .filter((latency): latency is number => latency !== undefined && latency !== null)
           .sort((a: number, b: number) => a - b);
 
         if (latencies.length > 0) {
@@ -66,7 +78,7 @@ export async function GET() {
 
         // Calculate requests per second based on timestamp of latest and oldest requests
         const timestamps = logsData.records
-          .map((r: any) => new Date(r.timestamp || r.created_at).getTime())
+          .map((record) => new Date(record.timestamp || record.created_at || "").getTime())
           .filter((t: number) => !isNaN(t));
 
         if (timestamps.length > 1) {
@@ -89,7 +101,7 @@ export async function GET() {
       requestsPerSec,
       p99LatencyMs,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Dashboard API Error:", error);
     return handleApiError(error);
   }

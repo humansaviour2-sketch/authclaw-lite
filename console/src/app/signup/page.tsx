@@ -94,10 +94,10 @@ function SignupPageContent() {
     return () => window.clearInterval(timer);
   }, []);
 
-  const resendSecondsRemaining = useMemo(() => {
-    if (!signup?.next_resend_at) return 0;
-    return Math.max(0, Math.ceil((new Date(signup.next_resend_at).getTime() - now) / 1000));
-  }, [now, signup?.next_resend_at]);
+  const nextResendAt = signup?.next_resend_at;
+  const resendSecondsRemaining = nextResendAt
+    ? Math.max(0, Math.ceil((new Date(nextResendAt).getTime() - now) / 1000))
+    : 0;
 
   const requestOtp = async (event: React.FormEvent) => {
     event.preventDefault();

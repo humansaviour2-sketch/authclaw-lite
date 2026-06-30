@@ -16,7 +16,7 @@ export async function GET() {
     }
     const data = await backendFetch("/v1/aws/status");
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }

@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { backendFetch, handleApiError } from "@/lib/api-client";
 
 export async function DELETE(
@@ -11,7 +10,7 @@ export async function DELETE(
       method: "DELETE",
     });
     return new Response(null, { status: 204 });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }

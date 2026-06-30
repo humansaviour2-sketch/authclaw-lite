@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { 
   ScrollText, 
   Search, 
@@ -11,7 +11,6 @@ import {
   ChevronRight, 
   RefreshCw,
   SlidersHorizontal,
-  Calendar,
   AlertTriangle,
   FileDown,
   X,
@@ -38,9 +37,10 @@ interface AuditRecord {
   request_id?: string;
   prior_hash?: string;
   integrity_hash?: string;
-  execution_trace?: any;
-  [key: string]: any;
+  execution_trace?: string | string[] | null;
 }
+
+const errorMessage = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
 
 const parseExecutionTrace = (trace: unknown): string[] => {
   if (!trace) return [];
@@ -62,9 +62,14 @@ const traceValue = (trace: string[], key: string) => {
   return item ? item.slice(prefix.length) : "";
 };
 
+const formatAuditValue = (value: unknown): string => {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return JSON.stringify(value) || "";
+  return String(value);
+};
+
 export default function AuditPage() {
   const [records, setRecords] = useState<AuditRecord[]>([]);
-  const [total, setTotal] = useState(0);
   const [auditSource, setAuditSource] = useState("");
   const [integrityCheckedByBackend, setIntegrityCheckedByBackend] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -73,6 +78,11 @@ export default function AuditPage() {
   // Inspector Panel State
   const [selectedRecord, setSelectedRecord] = useState<AuditRecord | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const inspectedProvider: string = typeof selectedRecord?.provider === "string" ? selectedRecord.provider : "";
+  const inspectedAction: string = typeof selectedRecord?.action === "string" ? selectedRecord.action : "";
+  const inspectedActorId: string = typeof selectedRecord?.actor_id === "string" && selectedRecord.actor_id ? selectedRecord.actor_id : "System";
+  const inspectedActorType: string = typeof selectedRecord?.actor_type === "string" && selectedRecord.actor_type ? selectedRecord.actor_type : "N/A";
+  const inspectedRequestId: string = typeof selectedRecord?.request_id === "string" && selectedRecord.request_id ? selectedRecord.request_id : "N/A";
 
   const handleCopy = async (text: string, field: string) => {
     await copyTextToClipboard(text);
@@ -88,10 +98,10 @@ export default function AuditPage() {
   const [integrityCheck, setIntegrityCheck] = useState(true);
 
   // Pagination
-  const [limit, setLimit] = useState(10);
+  const limit = 10;
   const [offset, setOffset] = useState(0);
 
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -113,20 +123,22 @@ export default function AuditPage() {
       const data = await res.json();
       
       setRecords(data.records || []);
-      setTotal(data.total || (data.records ? data.records.length : 0));
       setAuditSource(data.source || "");
       setIntegrityCheckedByBackend(Boolean(data.integrity_checked));
-    } catch (err: any) {
-      console.warn("Audit fetchLogs failed:", err.message);
-      setError(err.message || "Could not retrieve audit logs from ClickHouse/Postgres");
+    } catch (err: unknown) {
+      console.warn("Audit fetchLogs failed:", errorMessage(err, "Unknown error"));
+      setError(errorMessage(err, "Could not retrieve audit logs from ClickHouse/Postgres"));
     } finally {
       setLoading(false);
     }
-  };
+  }, [actionFilter, integrityCheck, limit, offset]);
 
   useEffect(() => {
-    fetchLogs();
-  }, [offset, limit, actionFilter, integrityCheck]);
+    const timer = window.setTimeout(() => {
+      void fetchLogs();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchLogs]);
 
   // Client-side additional filtering for Actor ID & Date Range
   const filteredRecords = records.filter((rec) => {
@@ -453,7 +465,7 @@ export default function AuditPage() {
       </div>
 
       {/* Slide-out Event Inspector Panel */}
-      {selectedRecord && (
+      {selectedRecord ? (
         <div className="fixed inset-0 z-50 flex justify-end">
           {/* Backdrop */}
           <div 
@@ -512,7 +524,7 @@ export default function AuditPage() {
                 )}
               </div>
               <span className="text-[10px] font-bold text-slate-550 uppercase px-2 py-0.5 rounded bg-slate-900 border border-slate-850">
-                Source: {selectedRecord.provider ? "LLM Proxy" : "System Audit"}
+                Source: {inspectedProvider ? "LLM Proxy" : "System Audit"}
               </span>
             </div>
 
@@ -539,7 +551,7 @@ export default function AuditPage() {
                   <div>
                     <span className="text-slate-550 text-[9px] font-black uppercase">REQUEST CORRELATION ID</span>
                     <p className="font-mono text-[10px] text-slate-350 mt-0.5">
-                      {selectedRecord.request_id || "N/A"}
+                      {inspectedRequestId}
                     </p>
                   </div>
                   <div>
@@ -552,11 +564,11 @@ export default function AuditPage() {
                     <span className="text-slate-550 text-[9px] font-black uppercase">ACTION</span>
                     <p className="mt-0.5 font-semibold">
                       <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                        selectedRecord.action.toLowerCase() === 'block' 
+                        inspectedAction.toLowerCase() === 'block' 
                           ? 'bg-red-500/10 border border-red-500/20 text-red-400' 
                           : 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
                       }`}>
-                        {selectedRecord.action.toUpperCase()}
+                        {inspectedAction.toUpperCase()}
                       </span>
                     </p>
                   </div>
@@ -571,21 +583,21 @@ export default function AuditPage() {
                 <div className="grid grid-cols-2 gap-3.5 p-4 rounded-xl border border-slate-800 bg-[#07070a] text-[11px]">
                   <div>
                     <span className="text-slate-550 text-[9px] font-black uppercase">ACTOR ID</span>
-                    <p className="font-mono text-[10px] text-slate-300 mt-0.5 truncate select-all" title={selectedRecord.actor_id}>
-                      {selectedRecord.actor_id || "System"}
+                    <p className="font-mono text-[10px] text-slate-300 mt-0.5 truncate select-all" title={inspectedActorId}>
+                      {inspectedActorId}
                     </p>
                   </div>
                   <div>
                     <span className="text-slate-550 text-[9px] font-black uppercase">ACTOR TYPE</span>
                     <p className="text-slate-350 mt-0.5 capitalize font-semibold">
-                      {selectedRecord.actor_type || "N/A"}
+                      {inspectedActorType}
                     </p>
                   </div>
                 </div>
               </div>
 
               {/* API Interception Details */}
-              {selectedRecord.provider && (
+              {inspectedProvider ? (
                 <div>
                   <h4 className="text-[10px] font-bold uppercase tracking-wider text-indigo-400 mb-2.5">
                     API Telemetry
@@ -617,7 +629,7 @@ export default function AuditPage() {
                     </div>
                   </div>
                 </div>
-              )}
+              ) : null}
 
               {/* Cryptographic Chain Details */}
               <div>
@@ -672,7 +684,7 @@ export default function AuditPage() {
                           ? JSON.parse(selectedRecord.execution_trace) 
                           : selectedRecord.execution_trace;
                         if (Array.isArray(parsed)) {
-                          return parsed.map((step: any, idx: number) => (
+                          return parsed.map((step: unknown, idx: number) => (
                             <div key={idx} className="flex gap-2 items-start py-1 text-[11px] leading-relaxed border-b border-slate-850/40 last:border-b-0 pb-1.5 last:pb-0">
                               <span className="w-4.5 h-4.5 rounded bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-bold text-[9px] flex-shrink-0">
                                 {idx + 1}
@@ -777,7 +789,8 @@ export default function AuditPage() {
                   "provider", "model", "response_status", "duration_ms", "prior_hash", 
                   "integrity_hash", "execution_trace", "chain_valid", "frameworks_affected"
                 ]);
-                const customKeys = Object.keys(selectedRecord).filter(key => !STANDARD_FIELDS.has(key));
+                const recordValues = selectedRecord as unknown as Record<string, unknown>;
+                const customKeys = Object.keys(recordValues).filter(key => !STANDARD_FIELDS.has(key));
                 if (customKeys.length === 0) return null;
                 return (
                   <div>
@@ -791,9 +804,7 @@ export default function AuditPage() {
                             {key}
                           </span>
                           <span className="font-mono text-[10px] text-slate-350 mt-0.5 break-all block">
-                            {typeof selectedRecord[key] === 'object' 
-                              ? JSON.stringify(selectedRecord[key]) 
-                              : String(selectedRecord[key])}
+                            {formatAuditValue(recordValues[key])}
                           </span>
                         </div>
                       ))}
@@ -816,7 +827,7 @@ export default function AuditPage() {
             </div>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

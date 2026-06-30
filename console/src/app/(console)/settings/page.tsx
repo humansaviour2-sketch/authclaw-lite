@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import Image from "next/image";
+import React, { useCallback, useEffect, useState } from "react";
 import { 
-  Settings, 
   Users, 
   KeyRound, 
   Building, 
@@ -99,6 +99,8 @@ interface UsageLimitState {
   spend_remaining_today_usd: number;
 }
 
+const errorMessage = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
+
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<"users" | "security" | "keys" | "limits" | "tenant">("users");
   const controlPlaneHost = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -140,7 +142,7 @@ export default function SettingsPage() {
   const [tenantActionBusy, setTenantActionBusy] = useState(false);
   const isOwner = sessionRole === "owner";
 
-  const fetchUsersAndKeys = async () => {
+  const fetchUsersAndKeys = useCallback(async () => {
     try {
       // Fetch users
       const uRes = await fetch("/api/users");
@@ -198,14 +200,14 @@ export default function SettingsPage() {
         const usageData = await usageRes.json().catch(() => ({}));
         setUsageError(usageData.error || "Could not load usage limits");
       }
-    } catch (err: any) {
-      console.warn("Settings fetchUsersAndKeys failed:", err.message);
+    } catch (err: unknown) {
+      console.warn("Settings fetchUsersAndKeys failed:", err instanceof Error ? err.message : "Unknown error");
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchSession = async () => {
+  const fetchSession = useCallback(async () => {
     try {
       const res = await fetch("/api/auth/session");
       if (res.status === 401) {
@@ -217,15 +219,18 @@ export default function SettingsPage() {
         setTenantId(data.tenantId || "Unknown");
         setSessionRole((data.role || "viewer").toLowerCase());
       }
-    } catch (err: any) {
-      console.warn("Settings fetchSession failed:", err.message);
+    } catch (err: unknown) {
+      console.warn("Settings fetchSession failed:", err instanceof Error ? err.message : "Unknown error");
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchUsersAndKeys();
-    fetchSession();
-  }, []);
+    const timer = window.setTimeout(() => {
+      void fetchUsersAndKeys();
+      void fetchSession();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchUsersAndKeys, fetchSession]);
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -252,8 +257,8 @@ export default function SettingsPage() {
       setUserRole("viewer");
       setInviteResult(data);
       await fetchUsersAndKeys();
-    } catch (err: any) {
-      setUserError(err.message || "An unexpected error occurred");
+    } catch (err: unknown) {
+      setUserError(errorMessage(err, "An unexpected error occurred"));
     } finally {
       setUserSubmitting(false);
     }
@@ -266,8 +271,8 @@ export default function SettingsPage() {
       const res = await fetch(`/api/users/invites/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to cancel invite");
       setPendingInvites(pendingInvites.filter((invite) => invite.signup_id !== id));
-    } catch (err: any) {
-      setUserError(err.message || "Could not cancel invite");
+    } catch (err: unknown) {
+      setUserError(errorMessage(err, "Could not cancel invite"));
     }
   };
 
@@ -281,8 +286,8 @@ export default function SettingsPage() {
       setMfaSetup(data);
       setSecurityState(data);
       await fetchUsersAndKeys();
-    } catch (err: any) {
-      setMfaError(err.message || "Could not enable MFA");
+    } catch (err: unknown) {
+      setMfaError(errorMessage(err, "Could not enable MFA"));
     } finally {
       setMfaBusy(false);
     }
@@ -299,8 +304,8 @@ export default function SettingsPage() {
       setMfaSetup(null);
       setSecurityState(data);
       await fetchUsersAndKeys();
-    } catch (err: any) {
-      setMfaError(err.message || "Could not disable MFA");
+    } catch (err: unknown) {
+      setMfaError(errorMessage(err, "Could not disable MFA"));
     } finally {
       setMfaBusy(false);
     }
@@ -313,8 +318,8 @@ export default function SettingsPage() {
       const res = await fetch(`/api/users/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete user");
       setUsers(users.map((u) => u.id === id ? { ...u, is_active: false } : u));
-    } catch (err: any) {
-      alert(err.message || "Could not delete user");
+    } catch (err: unknown) {
+      alert(errorMessage(err, "Could not delete user"));
     }
   };
 
@@ -347,8 +352,8 @@ export default function SettingsPage() {
       setKeyScopes(["read"]);
       setKeyExpiresInDays(90);
       await fetchUsersAndKeys();
-    } catch (err: any) {
-      setKeyError(err.message || "An unexpected error occurred");
+    } catch (err: unknown) {
+      setKeyError(errorMessage(err, "An unexpected error occurred"));
     } finally {
       setKeySubmitting(false);
     }
@@ -361,8 +366,8 @@ export default function SettingsPage() {
       const res = await fetch(`/api/api-keys/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to revoke key");
       setApiKeys(apiKeys.filter((k) => k.id !== id));
-    } catch (err: any) {
-      alert(err.message || "Could not revoke key");
+    } catch (err: unknown) {
+      alert(errorMessage(err, "Could not revoke key"));
     }
   };
 
@@ -383,8 +388,8 @@ export default function SettingsPage() {
       if (!res.ok) throw new Error(data.error || "Failed to rotate key");
       setGeneratedKey(data.api_key);
       await fetchUsersAndKeys();
-    } catch (err: any) {
-      alert(err.message || "Could not rotate key");
+    } catch (err: unknown) {
+      alert(errorMessage(err, "Could not rotate key"));
     }
   };
 
@@ -435,8 +440,8 @@ export default function SettingsPage() {
         throw new Error(data.error || "Failed to disable tenant");
       }
       setTenantStatus(data.status || nextStatus);
-    } catch (err: any) {
-      setTenantActionError(err.message || "Could not update tenant status");
+    } catch (err: unknown) {
+      setTenantActionError(errorMessage(err, "Could not update tenant status"));
     } finally {
       setTenantActionBusy(false);
     }
@@ -705,9 +710,12 @@ export default function SettingsPage() {
               <div className="mt-6 grid gap-4 md:grid-cols-2">
                 <div className="rounded-xl border border-slate-800 bg-[#07070a] p-4 flex flex-col items-center justify-center">
                   <div className="mb-3 text-[10px] font-bold uppercase tracking-wider text-slate-500 w-full text-left">Scan with Authenticator App</div>
-                  <img 
+                  <Image 
                     src={`data:image/png;base64,${mfaSetup.qr_code_base64}`} 
                     alt="MFA QR Code" 
+                    width={128}
+                    height={128}
+                    unoptimized
                     className="w-32 h-32 rounded bg-white p-1"
                   />
                 </div>

@@ -5,7 +5,7 @@ export async function POST() {
   try {
     const data = await backendFetch("/v1/users/me/mfa/setup", { method: "POST" });
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }

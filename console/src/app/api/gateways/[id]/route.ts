@@ -13,7 +13,7 @@ export async function PUT(
       body: JSON.stringify(body),
     });
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }
@@ -28,7 +28,7 @@ export async function DELETE(
       method: "DELETE",
     });
     return new Response(null, { status: 204 });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }

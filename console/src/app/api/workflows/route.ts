@@ -70,7 +70,7 @@ export async function GET() {
       workflows,
       approvals: approvalsRes.rows,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }
@@ -83,7 +83,7 @@ export async function POST(request: Request) {
       body: JSON.stringify(body),
     });
     return NextResponse.json(data, { status: 201 });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }

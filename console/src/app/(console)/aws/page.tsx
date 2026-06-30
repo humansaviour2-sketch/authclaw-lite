@@ -145,9 +145,12 @@ export default function AWSConnectorPage() {
   }, []);
 
   useEffect(() => {
-    fetchStatus();
-    fetchDocuments();
-    fetchUsage();
+    const timer = window.setTimeout(() => {
+      void fetchStatus();
+      void fetchDocuments();
+      void fetchUsage();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [fetchStatus, fetchDocuments, fetchUsage]);
 
   const handleSync = async () => {
@@ -163,8 +166,8 @@ export default function AWSConnectorPage() {
       } else {
         setSyncResult(`✗ ${data.detail || "Sync failed"}`);
       }
-    } catch (e: any) {
-      setSyncResult(`✗ ${e.message}`);
+    } catch (e: unknown) {
+      setSyncResult(`✗ ${e instanceof Error ? e.message : "Sync failed"}`);
     } finally {
       setSyncing(false);
     }

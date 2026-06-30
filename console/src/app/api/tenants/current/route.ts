@@ -5,7 +5,7 @@ export async function GET() {
   try {
     const data = await backendFetch("/v1/tenants/current");
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }

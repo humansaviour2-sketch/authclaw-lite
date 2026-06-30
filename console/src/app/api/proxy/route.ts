@@ -26,14 +26,14 @@ async function proxyRequest(request: Request, method: string) {
       try {
         const body = await request.json();
         options.body = JSON.stringify(body);
-      } catch (e) {
+      } catch {
         // ignore body parse error if no body provided
       }
     }
 
     const data = await backendFetch(path, options);
     return NextResponse.json(data || {});
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }
