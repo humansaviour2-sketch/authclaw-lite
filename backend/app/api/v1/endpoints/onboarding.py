@@ -442,6 +442,7 @@ def verify(payload: OnboardingVerifyRequest, request: Request):
                 description="Issued during AuthClaw Lite tenant invite verification",
                 scopes=_scopes_for_role(invited_role),
                 is_active=True,
+                expires_at=now + timedelta(days=90),
                 created_by=user.id,
             )
             db.add(api_key)
@@ -510,6 +511,7 @@ def verify(payload: OnboardingVerifyRequest, request: Request):
             description="Issued during AuthClaw Lite onboarding",
             scopes=["admin", "read", "write"],
             is_active=True,
+            expires_at=now + timedelta(days=90),
             created_by=user.id,
         )
         db.add(api_key)

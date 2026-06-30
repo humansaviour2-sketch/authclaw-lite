@@ -16,7 +16,8 @@ import {
   X,
   AlertTriangle,
   Mail,
-  ShieldAlert
+  ShieldAlert,
+  RotateCw
 } from "lucide-react";
 import { copyTextToClipboard } from "@/lib/clipboard";
 
@@ -36,6 +37,12 @@ interface APIKeyItem {
   is_active: boolean;
   created_at: string;
   last_used?: string | null;
+  last_used_ip?: string | null;
+  last_used_request_id?: string | null;
+  expires_at: string;
+  revoked_at?: string | null;
+  rotated_at?: string | null;
+  rotated_from_id?: string | null;
 }
 
 interface InviteResult {
@@ -123,6 +130,7 @@ export default function SettingsPage() {
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
   const [keyName, setKeyName] = useState("");
   const [keyScopes, setKeyScopes] = useState<string[]>(["read"]);
+  const [keyExpiresInDays, setKeyExpiresInDays] = useState(90);
   const [keyError, setKeyError] = useState<string | null>(null);
   const [keySubmitting, setKeySubmitting] = useState(false);
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
@@ -324,7 +332,8 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: keyName,
-          scopes: keyScopes
+          scopes: keyScopes,
+          expires_in_days: keyExpiresInDays
         }),
       });
 
@@ -336,6 +345,7 @@ export default function SettingsPage() {
       setGeneratedKey(data.api_key);
       setKeyName("");
       setKeyScopes(["read"]);
+      setKeyExpiresInDays(90);
       await fetchUsersAndKeys();
     } catch (err: any) {
       setKeyError(err.message || "An unexpected error occurred");
@@ -353,6 +363,28 @@ export default function SettingsPage() {
       setApiKeys(apiKeys.filter((k) => k.id !== id));
     } catch (err: any) {
       alert(err.message || "Could not revoke key");
+    }
+  };
+
+  const handleRotateKey = async (key: APIKeyItem) => {
+    if (!isOwner) return;
+    if (!confirm("Rotate this API key? The old secret will stop working immediately.")) return;
+    try {
+      const res = await fetch(`/api/api-keys/${key.id}/rotate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: key.name,
+          scopes: key.scopes,
+          expires_in_days: 90
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to rotate key");
+      setGeneratedKey(data.api_key);
+      await fetchUsersAndKeys();
+    } catch (err: any) {
+      alert(err.message || "Could not rotate key");
     }
   };
 
@@ -737,6 +769,7 @@ export default function SettingsPage() {
                     <th className="px-6 py-4">Scopes</th>
                     <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4">Created At</th>
+                    <th className="px-6 py-4">Expires</th>
                     <th className="px-6 py-4">Last Used</th>
                     <th className="px-6 py-4 text-right">Actions</th>
                   </tr>
@@ -766,15 +799,28 @@ export default function SettingsPage() {
                         {new Date(k.created_at).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4 text-slate-500 font-mono">
-                        {k.last_used ? new Date(k.last_used).toLocaleString() : "Never"}
+                        {new Date(k.expires_at).toLocaleDateString()}
                       </td>
-                      <td className="px-6 py-4 text-right">
+                      <td className="px-6 py-4 text-slate-500 font-mono">
+                        <div>{k.last_used ? new Date(k.last_used).toLocaleString() : "Never"}</div>
+                        {k.last_used_ip && <div className="text-[9px] text-slate-600">{k.last_used_ip}</div>}
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => handleRotateKey(k)}
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded bg-slate-850 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[10px] font-semibold transition"
+                        >
+                          <RotateCw className="w-3 h-3" />
+                          Rotate
+                        </button>
                         <button
                           onClick={() => handleRevokeKey(k.id)}
                           className="flex items-center gap-1 px-2.5 py-1.5 rounded bg-red-950/20 hover:bg-red-950/80 text-red-400 border border-red-900/30 hover:border-red-800 text-[10px] font-semibold transition"
                         >
                           Revoke
                         </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1134,6 +1180,22 @@ export default function SettingsPage() {
                       </label>
                     ))}
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                    Expires In
+                  </label>
+                  <select
+                    value={keyExpiresInDays}
+                    onChange={(e) => setKeyExpiresInDays(Number(e.target.value))}
+                    className="w-full px-3 py-2 rounded-lg bg-[#07070a] border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-indigo-500/80 transition"
+                  >
+                    <option value={30}>30 days</option>
+                    <option value={90}>90 days</option>
+                    <option value={180}>180 days</option>
+                    <option value={365}>365 days</option>
+                  </select>
                 </div>
 
                 <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-200 text-[10px] leading-normal flex gap-2">

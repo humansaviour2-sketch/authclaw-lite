@@ -1,16 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from uuid import UUID
-import uuid
 import secrets
 import hashlib
 from typing import List
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from app.db.models import APIKey
-from app.schemas.models import APIKeyCreate, APIKeyResponse
-from app.core.auth import get_tenant_db, require_roles
+from app.schemas.models import APIKeyCreate, APIKeyResponse, APIKeyRotate
+from app.core.auth import get_tenant_db, require_roles, require_scopes
 
 router = APIRouter()
 
@@ -21,17 +20,47 @@ class APIKeyCreateResponse(BaseModel):
     scopes: List[str]
     is_active: bool
     created_at: datetime
+    expires_at: datetime
+    rotated_from_id: UUID | None = None
     api_key: str
 
 
-@router.get("", response_model=list[APIKeyResponse], dependencies=[require_roles(["owner"])])
-def list_api_keys(request: Request, db: Session = Depends(get_tenant_db)):
+def _hash_key(raw_key: str) -> str:
+    return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+
+def _new_raw_key() -> str:
+    return "ak_" + secrets.token_urlsafe(32)
+
+
+def _expiry(days: int) -> datetime:
+    return datetime.now(timezone.utc) + timedelta(days=days)
+
+
+def _require_not_current_key(request: Request, key: APIKey) -> None:
+    current_key_id = getattr(request.state, "api_key_id", None)
+    if current_key_id and str(key.id) == str(current_key_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Refusing to revoke or rotate the API key currently authenticating this request.",
+        )
+
+
+@router.get("", response_model=list[APIKeyResponse], dependencies=[require_roles(["owner"]), require_scopes(["read"])])
+def list_api_keys(
+    request: Request,
+    include_inactive: bool = False,
+    db: Session = Depends(get_tenant_db),
+):
     """List all API keys for the tenant (isolated by tenant RLS)"""
     tenant_id = request.state.tenant_id
-    return db.query(APIKey).filter(APIKey.tenant_id == tenant_id, APIKey.is_active == True).all()
+    query = db.query(APIKey).filter(APIKey.tenant_id == tenant_id)
+    if not include_inactive:
+        query = query.filter(APIKey.is_active == True)
+    return query.order_by(APIKey.created_at.desc()).all()
 
 
-@router.post("", response_model=APIKeyCreateResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_roles(["owner"])])
+@router.post("", response_model=APIKeyCreateResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_roles(["owner"]), require_scopes(["admin"])])
 def generate_api_key(
     request: Request,
     key_in: APIKeyCreate,
@@ -42,8 +71,8 @@ def generate_api_key(
     user_id = request.state.user_id
 
     # Generate a raw api key
-    raw_key = "ak_" + secrets.token_urlsafe(24)
-    key_hash = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    raw_key = _new_raw_key()
+    key_hash = _hash_key(raw_key)
 
     try:
         new_key = APIKey(
@@ -53,7 +82,8 @@ def generate_api_key(
             description=key_in.description,
             scopes=key_in.scopes,
             is_active=True,
-            created_by=user_id
+            expires_at=_expiry(key_in.expires_in_days),
+            created_by=user_id,
         )
         db.add(new_key)
         db.commit()
@@ -65,6 +95,7 @@ def generate_api_key(
             scopes=new_key.scopes,
             is_active=new_key.is_active,
             created_at=new_key.created_at,
+            expires_at=new_key.expires_at,
             api_key=raw_key
         )
     except Exception as e:
@@ -75,7 +106,53 @@ def generate_api_key(
         )
 
 
-@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_roles(["owner"])])
+@router.post("/{id}/rotate", response_model=APIKeyCreateResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_roles(["owner"]), require_scopes(["admin"])])
+def rotate_api_key(
+    id: UUID,
+    request: Request,
+    rotate_in: APIKeyRotate,
+    db: Session = Depends(get_tenant_db),
+):
+    """Rotate an API key by revoking the old key and returning a new secret once."""
+    tenant_id = request.state.tenant_id
+    user_id = request.state.user_id
+    old_key = db.query(APIKey).filter(APIKey.tenant_id == tenant_id, APIKey.id == id).first()
+    if not old_key:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API Key not found")
+    _require_not_current_key(request, old_key)
+    if not old_key.is_active or old_key.revoked_at or old_key.rotated_at:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="API key is not active")
+
+    raw_key = _new_raw_key()
+    new_key = APIKey(
+        tenant_id=tenant_id,
+        key_hash=_hash_key(raw_key),
+        name=rotate_in.name or old_key.name,
+        description=rotate_in.description if rotate_in.description is not None else old_key.description,
+        scopes=rotate_in.scopes or old_key.scopes,
+        is_active=True,
+        expires_at=_expiry(rotate_in.expires_in_days),
+        created_by=user_id,
+        rotated_from_id=old_key.id,
+    )
+    old_key.is_active = False
+    old_key.rotated_at = datetime.now(timezone.utc)
+    db.add(new_key)
+    db.commit()
+    db.refresh(new_key)
+    return APIKeyCreateResponse(
+        id=new_key.id,
+        name=new_key.name,
+        scopes=new_key.scopes,
+        is_active=new_key.is_active,
+        created_at=new_key.created_at,
+        expires_at=new_key.expires_at,
+        rotated_from_id=old_key.id,
+        api_key=raw_key,
+    )
+
+
+@router.delete("/{id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[require_roles(["owner"]), require_scopes(["admin"])])
 def revoke_api_key(
     id: UUID,
     request: Request,
@@ -89,5 +166,7 @@ def revoke_api_key(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="API Key not found"
         )
+    _require_not_current_key(request, key)
     key.is_active = False
+    key.revoked_at = datetime.now(timezone.utc)
     db.commit()

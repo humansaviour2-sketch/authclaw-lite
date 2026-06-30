@@ -1,5 +1,5 @@
 """SQLAlchemy ORM Models for AuthClaw"""
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from sqlalchemy import (
     Column, String, UUID, DateTime, Boolean, ForeignKey,
@@ -9,6 +9,10 @@ from app.db.base import Base
 from sqlalchemy.orm import relationship
 import uuid
 from sqlalchemy import UniqueConstraint, Enum
+
+
+def default_api_key_expiry():
+    return datetime.now(timezone.utc) + timedelta(days=90)
 
 
 class Tenant(Base):
@@ -88,7 +92,13 @@ class APIKey(Base):
     scopes = Column(ARRAY(String), nullable=False, default=["read"])  # read, write, admin
     is_active = Column(Boolean, default=True)
     last_used = Column(DateTime(timezone=True), nullable=True)
-    expires_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_ip = Column(String(64), nullable=True)
+    last_used_user_agent = Column(String(512), nullable=True)
+    last_used_request_id = Column(String(255), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False, default=default_api_key_expiry)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    rotated_at = Column(DateTime(timezone=True), nullable=True)
+    rotated_from_id = Column(UUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -166,6 +176,10 @@ class ProviderCredential(Base):
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     rotated_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    rotated_from_id = Column(UUID(as_uuid=True), ForeignKey("provider_credentials.id"), nullable=True)
+    version = Column(Integer, nullable=False, default=1)
 
     __table_args__ = (
         Index("idx_provider_credential_tenant", "tenant_id"),

@@ -23,8 +23,11 @@ func LoadProviderCredential(ctx context.Context, tenantID, provider string) (*Pr
 		return tx.QueryRowContext(ctx, `
 			SELECT encrypted_secret, endpoint
 			FROM provider_credentials
-			WHERE tenant_id = $1 AND provider = $2 AND status = 'active'
-			ORDER BY created_at DESC
+			WHERE tenant_id = $1
+			  AND provider = $2
+			  AND status = 'active'
+			  AND revoked_at IS NULL
+			ORDER BY version DESC, created_at DESC
 			LIMIT 1
 		`, tenantID, provider).Scan(&encryptedSecret, &endpoint)
 	})

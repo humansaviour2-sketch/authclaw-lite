@@ -35,6 +35,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             "/v1/onboarding/signup",
             "/v1/onboarding/resend",
             "/v1/onboarding/verify",
+            "/v1/auth/oidc/config",
         }
         if path in public_paths or path.startswith("/static"):
             return await call_next(request)
@@ -60,7 +61,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         try:
             # Query the resolve_api_key function (bypasses RLS due to SECURITY DEFINER)
             result = db.execute(
-                text("SELECT tenant_id, scopes, created_by FROM resolve_api_key(:key_hash)"),
+                text("SELECT id, tenant_id, scopes, created_by FROM resolve_api_key(:key_hash)"),
                 {"key_hash": key_hash}
             ).first()
 
@@ -99,8 +100,23 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 )
 
             db.execute(
-                text("UPDATE api_keys SET last_used = NOW() WHERE key_hash = :key_hash"),
-                {"key_hash": key_hash},
+                text(
+                    """
+                    UPDATE api_keys
+                    SET last_used = NOW(),
+                        last_used_ip = :ip,
+                        last_used_user_agent = :user_agent,
+                        last_used_request_id = :request_id,
+                        updated_at = NOW()
+                    WHERE id = :api_key_id
+                    """
+                ),
+                {
+                    "api_key_id": str(result.id),
+                    "ip": request.client.host if request.client else "",
+                    "user_agent": request.headers.get("user-agent", "")[:512],
+                    "request_id": request.headers.get("x-request-id", "")[:255],
+                },
             )
             db.commit()
 
@@ -108,6 +124,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.state.tenant_id = result.tenant_id
             request.state.scopes = result.scopes
             request.state.user_id = result.created_by
+            request.state.api_key_id = result.id
             request.state.user_role = _normalize_role(principal.role)
         except Exception as e:
             db.rollback()

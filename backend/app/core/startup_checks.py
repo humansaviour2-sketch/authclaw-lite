@@ -71,6 +71,17 @@ def validate_production_environment() -> None:
     if public_gateway and not public_gateway.startswith("https://"):
         errors.append("PUBLIC_GATEWAY_URL/NEXT_PUBLIC_GATEWAY_URL must use https:// in production")
 
+    oidc_values = {
+        "OIDC_ISSUER_URL": os.getenv("OIDC_ISSUER_URL", "").strip(),
+        "OIDC_CLIENT_ID": os.getenv("OIDC_CLIENT_ID", "").strip(),
+        "OIDC_REDIRECT_URI": os.getenv("OIDC_REDIRECT_URI", "").strip(),
+    }
+    if any(oidc_values.values()) and not all(oidc_values.values()):
+        missing = ", ".join(name for name, value in oidc_values.items() if not value)
+        errors.append(f"OIDC is partially configured; missing {missing}")
+    if oidc_values["OIDC_REDIRECT_URI"] and not oidc_values["OIDC_REDIRECT_URI"].startswith("https://"):
+        errors.append("OIDC_REDIRECT_URI must use https in production")
+
     if errors:
         joined = "; ".join(errors)
         raise RuntimeError(f"Production environment validation failed: {joined}")

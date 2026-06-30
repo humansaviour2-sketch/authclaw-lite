@@ -95,14 +95,17 @@ def main() -> None:
 
         conn.execute(
             text("""
-            INSERT INTO api_keys (id, tenant_id, key_hash, name, description, scopes, is_active, created_by)
+            INSERT INTO api_keys (id, tenant_id, key_hash, name, description, scopes, is_active, expires_at, created_by)
             VALUES (
                 :id, :tenant_id, :key_hash, 'AuthClaw Lite Demo Key',
                 'Seeded key for local/AWS Lite demo',
-                ARRAY['admin','read','write'], true, :created_by
+                ARRAY['admin','read','write'], true, NOW() + INTERVAL '90 days', :created_by
             )
             ON CONFLICT (key_hash) DO UPDATE SET
                 is_active = true,
+                expires_at = NOW() + INTERVAL '90 days',
+                revoked_at = NULL,
+                rotated_at = NULL,
                 scopes = ARRAY['admin','read','write'],
                 updated_at = NOW()
             """),

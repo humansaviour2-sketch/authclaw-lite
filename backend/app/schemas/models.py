@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from uuid import UUID
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class TenantCreate(BaseModel):
@@ -72,6 +72,34 @@ class APIKeyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     scopes: List[str] = Field(default=["read"], min_items=1)
+    expires_in_days: int = Field(default=90, ge=1, le=365)
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, value: List[str]) -> List[str]:
+        allowed = {"read", "write", "admin"}
+        normalized = sorted({scope.strip().lower() for scope in value if scope and scope.strip()})
+        invalid = sorted(set(normalized) - allowed)
+        if invalid:
+            raise ValueError(f"Unsupported API key scopes: {', '.join(invalid)}")
+        if not normalized:
+            raise ValueError("At least one API key scope is required")
+        return normalized
+
+
+class APIKeyRotate(BaseModel):
+    """Schema for rotating an API key into a new secret."""
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    scopes: Optional[List[str]] = None
+    expires_in_days: int = Field(default=90, ge=1, le=365)
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        if value is None:
+            return value
+        return APIKeyCreate.validate_scopes(value)
 
 
 class APIKeyResponse(BaseModel):
@@ -82,6 +110,12 @@ class APIKeyResponse(BaseModel):
     is_active: bool
     created_at: datetime
     last_used: Optional[datetime] = None
+    last_used_ip: Optional[str] = None
+    last_used_request_id: Optional[str] = None
+    expires_at: datetime
+    revoked_at: Optional[datetime] = None
+    rotated_at: Optional[datetime] = None
+    rotated_from_id: Optional[UUID] = None
 
     class Config:
         from_attributes = True
@@ -203,9 +237,12 @@ class ProviderCredentialResponse(BaseModel):
     endpoint: Optional[str] = None
     auth_scheme: str
     status: str
+    version: int = 1
     last_verified_at: Optional[datetime] = None
     created_at: datetime
     rotated_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+    rotated_from_id: Optional[UUID] = None
 
     class Config:
         from_attributes = True

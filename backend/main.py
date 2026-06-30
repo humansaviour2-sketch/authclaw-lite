@@ -47,6 +47,7 @@ from app.api.v1.endpoints.workflows import router as workflows_router
 from app.api.v1.endpoints.users import router as users_router
 from app.api.v1.endpoints.apikeys import router as apikeys_router
 from app.api.v1.endpoints.provider_credentials import router as provider_credentials_router
+from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.onboarding import router as onboarding_router
 from app.api.v1.endpoints.chat import router as chat_router
 from app.api.v1.endpoints.aws import router as aws_router
@@ -65,6 +66,7 @@ app.include_router(workflows_router, prefix="/v1/workflows", tags=["workflows"])
 app.include_router(users_router, prefix="/v1/users", tags=["users"])
 app.include_router(apikeys_router, prefix="/v1/api-keys", tags=["api-keys"])
 app.include_router(provider_credentials_router, prefix="/v1/provider-credentials", tags=["provider-credentials"])
+app.include_router(auth_router, prefix="/v1/auth", tags=["auth"])
 app.include_router(onboarding_router, prefix="/v1/onboarding", tags=["onboarding"])
 app.include_router(chat_router, prefix="/v1/chat", tags=["chat"])
 app.include_router(usage_limits_router, prefix="/v1/usage-limits", tags=["usage-limits"])
