@@ -22,7 +22,7 @@ PyJWT>=2.8.0
 
 # MFA
 pyotp>=2.9.0
-qrcode>=7.4.2
+qrcode[pil]>=7.4.2
 
 # Testing
 pytest>=8.0.0

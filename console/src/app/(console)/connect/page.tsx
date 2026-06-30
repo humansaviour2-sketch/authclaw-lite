@@ -8,9 +8,12 @@ import {
   Code2,
   KeyRound,
   Link2,
+  Lock,
+  Loader2,
   Play,
   Route,
   ShieldCheck,
+  X,
 } from "lucide-react";
 import { copyTextToClipboard } from "@/lib/clipboard";
 
@@ -140,6 +143,11 @@ export default function ConnectPage() {
   const [approvals, setApprovals] = useState<GatewayApproval[]>([]);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
+  // Gateway HITL MFA modal state
+  const [gatewayMfaTarget, setGatewayMfaTarget] = useState<GatewayApproval | null>(null);
+  const [gatewayTotpCode, setGatewayTotpCode] = useState("");
+  const [gatewayMfaError, setGatewayMfaError] = useState<string | null>(null);
+  const [gatewayMfaBusy, setGatewayMfaBusy] = useState(false);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [credentialProvider, setCredentialProvider] = useState<Provider>("gemini");
   const [credentialName, setCredentialName] = useState("Demo provider key");
@@ -277,16 +285,45 @@ export default function ConnectPage() {
     };
   }, []);
 
-  const decideApproval = async (id: string, decision: "approve" | "reject") => {
+  const decideApproval = async (id: string, decision: "approve" | "reject", totpCode?: string) => {
     setApprovalBusy(id);
     try {
-      const res = await fetch(`/api/approvals/${id}/${decision}`, { method: "POST" });
-      if (!res.ok) throw new Error(`Failed to ${decision} approval`);
+      const body = decision === "approve" && totpCode ? { totp_code: totpCode } : {};
+      const res = await fetch(`/api/approvals/${id}/${decision}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || data.error || `Failed to ${decision} approval`);
+      }
       await fetchApprovals();
     } catch (error: unknown) {
       setApprovalError(errorMessage(error, `Failed to ${decision} approval`));
     } finally {
       setApprovalBusy(null);
+    }
+  };
+
+  const handleGatewayApproveClick = (approval: GatewayApproval) => {
+    setGatewayMfaTarget(approval);
+    setGatewayTotpCode("");
+    setGatewayMfaError(null);
+  };
+
+  const handleGatewayMfaSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!gatewayMfaTarget) return;
+    setGatewayMfaBusy(true);
+    setGatewayMfaError(null);
+    try {
+      await decideApproval(gatewayMfaTarget.id, "approve", gatewayTotpCode || undefined);
+      setGatewayMfaTarget(null);
+    } catch (error: unknown) {
+      setGatewayMfaError(errorMessage(error, "MFA validation failed"));
+    } finally {
+      setGatewayMfaBusy(false);
     }
   };
 
@@ -805,7 +842,7 @@ export default function ConnectPage() {
                     Reject
                   </button>
                   <button
-                    onClick={() => void decideApproval(approval.id, "approve")}
+                    onClick={() => handleGatewayApproveClick(approval)}
                     disabled={approvalBusy === approval.id}
                     className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white disabled:opacity-50"
                   >
@@ -831,6 +868,76 @@ export default function ConnectPage() {
           </div>
         ))}
       </section>
+
+      {/* Gateway HITL MFA Challenge Modal */}
+      {gatewayMfaTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setGatewayMfaTarget(null)} />
+          <div className="relative w-full max-w-[400px] rounded-2xl bg-[#0e0e15] border border-slate-800 shadow-2xl p-6 overflow-hidden">
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 rounded-full bg-emerald-500/5 blur-[80px] pointer-events-none" />
+            <div className="flex justify-between items-center mb-6 border-b border-slate-800/80 pb-3">
+              <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                <Lock className="w-4 h-4 text-emerald-400" />
+                MFA Identity Authorization
+              </h3>
+              <button onClick={() => setGatewayMfaTarget(null)} className="text-slate-400 hover:text-white transition">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            {gatewayMfaError && (
+              <div className="p-3 mb-4 rounded-lg bg-red-500/10 border border-red-500/20 text-red-200 text-xs">
+                {gatewayMfaError}
+              </div>
+            )}
+            <form onSubmit={handleGatewayMfaSubmit} className="space-y-4">
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Confirm your administrator identity before allowing this gateway request to pass. Enter the 6-digit TOTP code from your authenticator app (or a backup recovery code).
+              </p>
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                  TOTP Code / Backup Code
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-650">
+                    <KeyRound className="w-4 h-4" />
+                  </span>
+                  <input
+                    type="text"
+                    value={gatewayTotpCode}
+                    onChange={(e) => setGatewayTotpCode(e.target.value)}
+                    placeholder="Enter code"
+                    autoFocus
+                    className="w-full pl-10 pr-4 py-2 rounded-lg bg-[#07070a] border border-slate-800 text-slate-200 text-xs font-mono placeholder-slate-700 focus:outline-none focus:border-emerald-500/80 transition text-center tracking-widest"
+                  />
+                </div>
+              </div>
+              <div className="pt-4 border-t border-slate-800 flex justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setGatewayMfaTarget(null)}
+                  className="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-350 font-semibold text-xs transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={gatewayMfaBusy}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-lg transition disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {gatewayMfaBusy ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Verifying...
+                    </>
+                  ) : (
+                    "Authorize Passage"
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
