@@ -34,6 +34,8 @@ class Tenant(Base):
     redaction_tokens = relationship("RedactionToken", back_populates="tenant", cascade="all, delete-orphan")
     workflows = relationship("ComplianceWorkflow", back_populates="tenant", cascade="all, delete-orphan")
     chat_sessions = relationship("ChatSession", back_populates="tenant", cascade="all, delete-orphan")
+    ephemeral_worker_tokens = relationship("EphemeralWorkerToken", back_populates="tenant", cascade="all, delete-orphan")
+    ephemeral_worker_runs = relationship("EphemeralWorkerRun", back_populates="tenant", cascade="all, delete-orphan")
     # Phase 16 — Evidence Repository
     evidence_records = relationship("EvidenceRecord", back_populates="tenant", cascade="all, delete-orphan")
     # Phase 17 — Findings Dashboard
@@ -535,6 +537,73 @@ class AWSS3Document(Base):
         Index("idx_s3_docs_synced", "synced_at"),
         # Prevent duplicate keys per tenant+bucket
         UniqueConstraint("tenant_id", "bucket_name", "object_key", name="uq_s3_doc_tenant_key"),
+    )
+
+
+# =============================================================================
+# E2.5 - Ephemeral Workers
+# =============================================================================
+
+class EphemeralWorkerToken(Base):
+    """Short-lived, scoped token issued to a scan/remediation worker."""
+    __tablename__ = "ephemeral_worker_tokens"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    workflow_id = Column(String(255), nullable=True)
+    action_id = Column(String(255), nullable=False)
+    connector = Column(String(50), nullable=False)
+    purpose = Column(String(50), nullable=False)
+    scopes = Column(ARRAY(String), nullable=False, default=list)
+    permission_boundary = Column(JSON, nullable=False, default=dict)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    token_prefix = Column(String(32), nullable=False)
+    status = Column(String(50), nullable=False, default="active")
+    issued_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    issued_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_action = Column(String(255), nullable=True)
+    use_count = Column(Integer, nullable=False, default=0)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+
+    tenant = relationship("Tenant", back_populates="ephemeral_worker_tokens")
+    runs = relationship("EphemeralWorkerRun", back_populates="worker_token", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_ephemeral_worker_token_tenant", "tenant_id"),
+        Index("idx_ephemeral_worker_token_status", "tenant_id", "status", "expires_at"),
+        Index("idx_ephemeral_worker_token_workflow", "tenant_id", "workflow_id"),
+        Index("idx_ephemeral_worker_token_prefix", "token_prefix"),
+    )
+
+
+class EphemeralWorkerRun(Base):
+    """Auditable authorization decision for one worker action attempt."""
+    __tablename__ = "ephemeral_worker_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    worker_token_id = Column(UUID(as_uuid=True), ForeignKey("ephemeral_worker_tokens.id"), nullable=True)
+    connector = Column(String(50), nullable=False)
+    action = Column(String(255), nullable=False)
+    required_scope = Column(String(255), nullable=False)
+    destructive = Column(Boolean, nullable=False, default=False)
+    status = Column(String(50), nullable=False)
+    reason = Column(Text, nullable=False)
+    started_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+
+    tenant = relationship("Tenant", back_populates="ephemeral_worker_runs")
+    worker_token = relationship("EphemeralWorkerToken", back_populates="runs")
+
+    __table_args__ = (
+        Index("idx_ephemeral_worker_run_tenant", "tenant_id", "started_at"),
+        Index("idx_ephemeral_worker_run_token", "worker_token_id"),
+        Index("idx_ephemeral_worker_run_status", "tenant_id", "status"),
+        Index("idx_ephemeral_worker_run_connector", "tenant_id", "connector"),
     )
 
 

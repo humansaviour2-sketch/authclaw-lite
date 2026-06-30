@@ -8,9 +8,9 @@ This checklist maps the project plan epics and exit criteria against the current
 
 ## Executive Summary
 
-AuthClaw now has meaningful coverage for the gateway, provider adapters, streaming redaction, HITL, remediation state machine with rollback, audit hash-chain, ClickHouse audit analytics, Kafka event backbone, auth/API-key lifecycle, secret envelopes, Terraform baseline, regulatory RAG, and multi-region RDS standby design. The remaining gaps are concentrated in five areas:
+AuthClaw now has meaningful coverage for the gateway, provider adapters, streaming redaction, HITL, remediation state machine with rollback, audit hash-chain, ClickHouse audit analytics, Kafka event backbone, auth/API-key lifecycle, secret envelopes, Terraform baseline, regulatory RAG, ephemeral worker tokens, and multi-region RDS standby design. The remaining gaps are concentrated in five areas:
 
-1. Scoped ephemeral workers and cloud/SCM connectors beyond the current AWS path.
+1. Full external worker runtimes and cloud/SCM connector execution beyond the current AWS path.
 2. Signed/verifiable audit export and auditor Trust Center workflows.
 3. CI/CD security gates and staging/prod promotion proof.
 4. Enterprise auth/SSO, full RBAC administration, and tenant administration polish.
@@ -29,6 +29,7 @@ AuthClaw now has meaningful coverage for the gateway, provider adapters, streami
 - PII/PHI redaction hardened with custom NER support, strategy coverage, inbound/outbound provider coverage, concurrency stabilization, timeout/fallback metrics, and tenant token retention/purge support.
 - RAG added for GDPR, HIPAA, and SOC 2 with versioned corpus, citation-backed agent answers, retrieval evaluation tests, corpus sync/status/search endpoints, and remediation guardrails tied to retrieved evidence.
 - Console lint hardening completed; `npm.cmd run lint` is now green.
+- Ephemeral worker baseline added with scoped short-lived worker tokens, TTL enforcement, deny-by-default connector permission boundaries, GitHub/GCP connector foundations, AWS S3 sync worker-token enforcement, audit-chain events for grants/use/denials/expiry/revocation, and a console worker-token lifecycle tab.
 
 ## Phase 1 - Foundation & Architecture
 
@@ -208,17 +209,24 @@ Missing pieces:
 
 ### E2.5 Ephemeral Workers
 
-Current status: Partial.
+Current status: Mostly complete.
+
+Completed:
+
+- Scoped temporary worker tokens can be issued per scan/remediation action.
+- Token TTL enforcement is present with a 30-minute hard cap.
+- Worker token grant, use, denial, expiry, and revocation are emitted into the audit hash-chain.
+- Deny-by-default permission boundaries are implemented for destructive cloud actions.
+- GitHub and GCP connector foundations are registered with explicit scopes and action maps.
+- AWS S3 sync now runs through a scoped ephemeral worker token before touching AWS.
+- Console Settings exposes connector boundaries, token issuance, one-time token reveal, token inventory, and revocation.
 
 Missing pieces:
 
-- Add true short-lived worker runtimes instead of only in-process/long-lived execution.
-- Add scoped temporary tokens per scan/remediation action.
-- Add GitHub connector.
-- Add GCP connector.
-- Expand AWS connector coverage beyond the current path.
-- Add token TTL enforcement and audit events for every token grant.
-- Add deny-by-default permission boundaries for destructive cloud actions.
+- Run workers in isolated short-lived runtime infrastructure instead of only issuing scoped credentials inside the control plane.
+- Implement live GitHub and GCP API execution paths behind the connector foundations.
+- Expand AWS connector execution coverage beyond S3 sync.
+- Add staging proof for worker-token expiry, revocation propagation, and destructive-action denial.
 
 ### E2.6 HITL Workflow Engine
 
@@ -424,10 +432,10 @@ Missing pieces:
 
 ## Recommended Next Work Order
 
-1. Ephemeral workers: scoped temporary tokens plus GitHub/GCP connector path.
-2. Cryptographic audit export: signed compliance export and verifier.
-3. Compliance dashboard scoring: live SOC 2/GDPR/HIPAA scoring from evidence and audit records.
-4. CI/CD hardening: SAST, dependency scan, image build, Terraform plan, integration, and benchmark gates.
-5. Latency and red-team evidence: official NFR benchmark and adversarial harness.
-6. HA/resilience proof: staging failover drills, RTO/RPO report, Redis/Kafka/ClickHouse resilience tests.
-7. Enterprise auth/admin: OIDC/SSO UI, RBAC matrix, tenant tier/rate-limit management.
+1. Cryptographic audit export: signed compliance export and verifier.
+2. Compliance dashboard scoring: live SOC 2/GDPR/HIPAA scoring from evidence and audit records.
+3. CI/CD hardening: SAST, dependency scan, image build, Terraform plan, integration, and benchmark gates.
+4. Latency and red-team evidence: official NFR benchmark and adversarial harness.
+5. HA/resilience proof: staging failover drills, RTO/RPO report, Redis/Kafka/ClickHouse resilience tests.
+6. Enterprise auth/admin: OIDC/SSO UI, RBAC matrix, tenant tier/rate-limit management.
+7. External ephemeral worker runtime: isolated worker launch, live GitHub/GCP execution, and broader AWS remediation execution.

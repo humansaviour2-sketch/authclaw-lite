@@ -99,10 +99,48 @@ interface UsageLimitState {
   spend_remaining_today_usd: number;
 }
 
+interface WorkerConnectorAction {
+  name: string;
+  scope: string;
+  destructive: boolean;
+}
+
+interface WorkerConnector {
+  connector: string;
+  display_name: string;
+  status: string;
+  credential_source: string;
+  scopes: string[];
+  actions: WorkerConnectorAction[];
+}
+
+interface WorkerTokenItem {
+  id: string;
+  connector: string;
+  purpose: string;
+  action_id: string;
+  workflow_id?: string | null;
+  scopes: string[];
+  permission_boundary: {
+    allowed_actions?: string[];
+    allow_destructive?: boolean;
+    destructive_actions?: string[];
+  };
+  token_prefix: string;
+  status: string;
+  issued_at: string;
+  expires_at: string;
+  revoked_at?: string | null;
+  last_used_at?: string | null;
+  last_used_action?: string | null;
+  use_count: number;
+  metadata?: Record<string, unknown>;
+}
+
 const errorMessage = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<"users" | "security" | "keys" | "limits" | "tenant">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "security" | "keys" | "workers" | "limits" | "tenant">("users");
   const controlPlaneHost = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   
   // List States
@@ -115,6 +153,19 @@ export default function SettingsPage() {
   const [mfaError, setMfaError] = useState<string | null>(null);
   const [usageLimits, setUsageLimits] = useState<UsageLimitState | null>(null);
   const [usageError, setUsageError] = useState<string | null>(null);
+  const [workerConnectors, setWorkerConnectors] = useState<WorkerConnector[]>([]);
+  const [workerTokens, setWorkerTokens] = useState<WorkerTokenItem[]>([]);
+  const [workerError, setWorkerError] = useState<string | null>(null);
+  const [workerSubmitting, setWorkerSubmitting] = useState(false);
+  const [workerCopied, setWorkerCopied] = useState(false);
+  const [generatedWorkerToken, setGeneratedWorkerToken] = useState<string | null>(null);
+  const [workerForm, setWorkerForm] = useState({
+    connector: "aws",
+    purpose: "scan",
+    action_id: "s3.sync",
+    ttl_seconds: 900,
+    scopes: ["aws:s3:read"],
+  });
   const [tenantId, setTenantId] = useState("Unknown");
   const [tenantStatus, setTenantStatus] = useState("active");
   const [sessionRole, setSessionRole] = useState("viewer");
@@ -199,6 +250,21 @@ export default function SettingsPage() {
       } else if (usageRes.status !== 403) {
         const usageData = await usageRes.json().catch(() => ({}));
         setUsageError(usageData.error || "Could not load usage limits");
+      }
+
+      const connectorsRes = await fetch("/api/ephemeral-workers/connectors");
+      if (connectorsRes.ok) {
+        const connectorsData = await connectorsRes.json();
+        setWorkerConnectors(connectorsData.connectors || []);
+      }
+
+      const workerTokensRes = await fetch("/api/ephemeral-workers/tokens");
+      if (workerTokensRes.ok) {
+        setWorkerTokens(await workerTokensRes.json());
+        setWorkerError(null);
+      } else if (workerTokensRes.status !== 403) {
+        const workerData = await workerTokensRes.json().catch(() => ({}));
+        setWorkerError(workerData.error || "Could not load worker tokens");
       }
     } catch (err: unknown) {
       console.warn("Settings fetchUsersAndKeys failed:", err instanceof Error ? err.message : "Unknown error");
@@ -408,6 +474,110 @@ export default function SettingsPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const refreshWorkers = async () => {
+    const [connectorsRes, tokensRes] = await Promise.all([
+      fetch("/api/ephemeral-workers/connectors"),
+      fetch("/api/ephemeral-workers/tokens"),
+    ]);
+    if (connectorsRes.ok) {
+      const connectorsData = await connectorsRes.json();
+      setWorkerConnectors(connectorsData.connectors || []);
+    }
+    if (tokensRes.ok) {
+      setWorkerTokens(await tokensRes.json());
+      setWorkerError(null);
+    }
+  };
+
+  const selectedWorkerConnector = workerConnectors.find((item) => item.connector === workerForm.connector);
+  const selectedWorkerAction = selectedWorkerConnector?.actions.find((item) => item.name === workerForm.action_id);
+
+  const updateWorkerConnector = (connector: string) => {
+    const nextConnector = workerConnectors.find((item) => item.connector === connector);
+    const firstAction = nextConnector?.actions[0];
+    setWorkerForm({
+      connector,
+      purpose: "scan",
+      action_id: firstAction?.name || "",
+      ttl_seconds: 900,
+      scopes: firstAction?.scope ? [firstAction.scope] : [],
+    });
+    setGeneratedWorkerToken(null);
+    setWorkerError(null);
+  };
+
+  const updateWorkerAction = (actionName: string) => {
+    const action = selectedWorkerConnector?.actions.find((item) => item.name === actionName);
+    setWorkerForm((current) => ({
+      ...current,
+      action_id: actionName,
+      scopes: action?.scope ? Array.from(new Set([...current.scopes, action.scope])) : current.scopes,
+    }));
+  };
+
+  const toggleWorkerScope = (scope: string) => {
+    setWorkerForm((current) => ({
+      ...current,
+      scopes: current.scopes.includes(scope)
+        ? current.scopes.filter((item) => item !== scope)
+        : [...current.scopes, scope],
+    }));
+  };
+
+  const handleIssueWorkerToken = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!isOwner && sessionRole !== "admin") return;
+    setWorkerSubmitting(true);
+    setWorkerError(null);
+    setGeneratedWorkerToken(null);
+
+    try {
+      const destructiveAction = selectedWorkerAction?.destructive ? [workerForm.action_id] : [];
+      const res = await fetch("/api/ephemeral-workers/tokens", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connector: workerForm.connector,
+          purpose: workerForm.purpose,
+          action_id: workerForm.action_id,
+          ttl_seconds: workerForm.ttl_seconds,
+          scopes: workerForm.scopes,
+          allow_destructive: destructiveAction.length > 0,
+          destructive_actions: destructiveAction,
+          metadata: { source: "console.settings" },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to issue worker token");
+      setGeneratedWorkerToken(data.token);
+      await refreshWorkers();
+    } catch (err: unknown) {
+      setWorkerError(errorMessage(err, "Could not issue worker token"));
+    } finally {
+      setWorkerSubmitting(false);
+    }
+  };
+
+  const handleRevokeWorkerToken = async (id: string) => {
+    if (!isOwner && sessionRole !== "admin") return;
+    if (!confirm("Revoke this worker token? Running workers using it will be denied on their next action.")) return;
+    try {
+      const res = await fetch(`/api/ephemeral-workers/tokens/${id}/revoke`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to revoke worker token");
+      await refreshWorkers();
+    } catch (err: unknown) {
+      setWorkerError(errorMessage(err, "Could not revoke worker token"));
+    }
+  };
+
+  const copyWorkerToken = async () => {
+    if (!generatedWorkerToken) return;
+    await copyTextToClipboard(generatedWorkerToken);
+    setWorkerCopied(true);
+    setTimeout(() => setWorkerCopied(false), 2000);
+  };
+
   const inviteLink = inviteResult
     ? `${typeof window !== "undefined" ? window.location.origin : ""}/signup?invite=${inviteResult.signup_id}`
     : "";
@@ -488,6 +658,16 @@ export default function SettingsPage() {
         >
           {activeTab === "keys" && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500 rounded-full" />}
           API Keys Lifecycle
+        </button>
+        <button
+          onClick={() => setActiveTab("workers")}
+          disabled={!isOwner && sessionRole !== "admin"}
+          className={`pb-3.5 text-sm font-semibold transition relative ${
+            !isOwner && sessionRole !== "admin" ? "text-slate-700 cursor-not-allowed" : activeTab === "workers" ? "text-indigo-400" : "text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          {activeTab === "workers" && <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500 rounded-full" />}
+          Worker Tokens
         </button>
         <button
           onClick={() => setActiveTab("limits")}
@@ -829,6 +1009,274 @@ export default function SettingsPage() {
                           Revoke
                         </button>
                         </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Worker Tokens */}
+      {activeTab === "workers" && (isOwner || sessionRole === "admin") && (
+        <div className="space-y-6">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+            <form onSubmit={handleIssueWorkerToken} className="rounded-2xl border border-slate-800 bg-[#09090d] p-5 shadow-xl">
+              <div className="mb-5 flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <KeyRound className="w-4 h-4 text-indigo-400" />
+                    Issue Ephemeral Worker Token
+                  </h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Short-lived credentials for scans and remediation workers.
+                  </p>
+                </div>
+                <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-bold uppercase text-emerald-300">
+                  Max 30m
+                </span>
+              </div>
+
+              {workerError && (
+                <div className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">
+                  {workerError}
+                </div>
+              )}
+
+              {generatedWorkerToken && (
+                <div className="mb-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3">
+                  <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-emerald-300">
+                    Copy Worker Token Once
+                  </div>
+                  <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-[#07070a] p-2">
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs text-emerald-100">
+                      {generatedWorkerToken}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={copyWorkerToken}
+                      className="rounded border border-slate-700 p-1.5 text-slate-300 hover:bg-slate-800"
+                    >
+                      {workerCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Connector
+                  </label>
+                  <select
+                    value={workerForm.connector}
+                    onChange={(event) => updateWorkerConnector(event.target.value)}
+                    className="w-full rounded-lg border border-slate-800 bg-[#07070a] px-3 py-2 text-xs text-slate-200 focus:border-indigo-500/80 focus:outline-none"
+                  >
+                    {workerConnectors.map((connector) => (
+                      <option key={connector.connector} value={connector.connector}>
+                        {connector.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Purpose
+                  </label>
+                  <select
+                    value={workerForm.purpose}
+                    onChange={(event) => setWorkerForm((current) => ({ ...current, purpose: event.target.value }))}
+                    className="w-full rounded-lg border border-slate-800 bg-[#07070a] px-3 py-2 text-xs text-slate-200 focus:border-indigo-500/80 focus:outline-none"
+                  >
+                    <option value="scan">Scan</option>
+                    <option value="remediation">Remediation</option>
+                    <option value="audit">Audit</option>
+                    <option value="test">Test</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Action
+                  </label>
+                  <select
+                    value={workerForm.action_id}
+                    onChange={(event) => updateWorkerAction(event.target.value)}
+                    className="w-full rounded-lg border border-slate-800 bg-[#07070a] px-3 py-2 text-xs text-slate-200 focus:border-indigo-500/80 focus:outline-none"
+                  >
+                    {(selectedWorkerConnector?.actions || []).map((action) => (
+                      <option key={action.name} value={action.name}>
+                        {action.name}{action.destructive ? " (destructive)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    TTL Seconds
+                  </label>
+                  <input
+                    type="number"
+                    min={60}
+                    max={1800}
+                    value={workerForm.ttl_seconds}
+                    onChange={(event) => setWorkerForm((current) => ({ ...current, ttl_seconds: Number(event.target.value) }))}
+                    className="w-full rounded-lg border border-slate-800 bg-[#07070a] px-3 py-2 text-xs text-slate-200 focus:border-indigo-500/80 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">Scopes</div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {(selectedWorkerConnector?.scopes || []).map((scope) => (
+                    <label key={scope} className="flex items-center gap-2 rounded-lg border border-slate-800 bg-[#07070a] px-3 py-2 text-xs text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={workerForm.scopes.includes(scope)}
+                        onChange={() => toggleWorkerScope(scope)}
+                        className="rounded border-slate-800 bg-[#07070a] text-indigo-500 focus:ring-0 focus:ring-offset-0"
+                      />
+                      <span className="font-mono text-[11px]">{scope}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-[10px] leading-normal text-amber-100">
+                Destructive actions are denied unless the selected action is explicitly marked destructive and allowlisted into the token boundary.
+              </div>
+
+              <div className="mt-5 flex justify-end">
+                <button
+                  type="submit"
+                  disabled={workerSubmitting || workerForm.scopes.length === 0 || !workerForm.action_id}
+                  className="inline-flex items-center gap-2 rounded-lg bg-indigo-650 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Plus className="w-4 h-4" />
+                  {workerSubmitting ? "Issuing..." : "Issue Token"}
+                </button>
+              </div>
+            </form>
+
+            <div className="rounded-2xl border border-slate-800 bg-[#09090d] p-5 shadow-xl">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-white">Connector Boundaries</h3>
+                  <p className="mt-1 text-xs text-slate-500">Deny-by-default action map for worker execution.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={refreshWorkers}
+                  className="rounded-lg border border-slate-700 p-2 text-slate-300 hover:bg-slate-800"
+                >
+                  <RotateCw className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="space-y-3">
+                {workerConnectors.map((connector) => (
+                  <div key={connector.connector} className="rounded-xl border border-slate-800 bg-[#07070a] p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="text-sm font-bold text-slate-200">{connector.display_name}</div>
+                        <div className="mt-1 text-[10px] text-slate-500">
+                          {connector.credential_source} · {connector.actions.length} actions
+                        </div>
+                      </div>
+                      <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-300">
+                        {connector.status}
+                      </span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {connector.actions.slice(0, 6).map((action) => (
+                        <span
+                          key={action.name}
+                          className={`rounded border px-2 py-1 font-mono text-[10px] ${
+                            action.destructive
+                              ? "border-red-900/50 bg-red-950/20 text-red-200"
+                              : "border-slate-700 bg-slate-900/60 text-slate-300"
+                          }`}
+                        >
+                          {action.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-800 bg-[#09090d] shadow-xl overflow-hidden">
+            <div className="flex items-center justify-between border-b border-slate-800 px-5 py-4">
+              <div>
+                <h3 className="text-sm font-bold text-white">Recent Worker Tokens</h3>
+                <p className="mt-1 text-xs text-slate-500">Raw secrets are never stored or shown after creation.</p>
+              </div>
+              <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] font-semibold text-slate-400">
+                {workerTokens.length} tokens
+              </span>
+            </div>
+            {workerTokens.length === 0 ? (
+              <div className="p-6 text-xs text-slate-500">No worker tokens issued yet.</div>
+            ) : (
+              <table className="w-full text-left text-xs">
+                <thead className="border-b border-slate-800 bg-[#07070a]/40 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  <tr>
+                    <th className="px-5 py-3">Connector</th>
+                    <th className="px-5 py-3">Action</th>
+                    <th className="px-5 py-3">Boundary</th>
+                    <th className="px-5 py-3">Expires</th>
+                    <th className="px-5 py-3">Status</th>
+                    <th className="px-5 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {workerTokens.map((token) => (
+                    <tr key={token.id} className="hover:bg-slate-800/10">
+                      <td className="px-5 py-4">
+                        <div className="font-semibold text-slate-200 uppercase">{token.connector}</div>
+                        <div className="mt-1 font-mono text-[10px] text-slate-600">{token.token_prefix}</div>
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="font-mono text-slate-300">{token.action_id}</div>
+                        <div className="mt-1 text-[10px] text-slate-600">{token.purpose}</div>
+                      </td>
+                      <td className="px-5 py-4">
+                        <div className="text-[10px] text-slate-400">
+                          {(token.permission_boundary.allowed_actions || []).length} allowed actions
+                        </div>
+                        <div className="mt-1 text-[10px] text-slate-600">
+                          uses {token.use_count}
+                          {token.last_used_action ? ` · last ${token.last_used_action}` : ""}
+                        </div>
+                      </td>
+                      <td className="px-5 py-4 text-slate-500">
+                        {new Date(token.expires_at).toLocaleString()}
+                      </td>
+                      <td className="px-5 py-4">
+                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${
+                          token.status === "active"
+                            ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+                            : "border-slate-700 bg-slate-900 text-slate-400"
+                        }`}>
+                          {token.status}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4 text-right">
+                        {token.status === "active" ? (
+                          <button
+                            type="button"
+                            onClick={() => handleRevokeWorkerToken(token.id)}
+                            className="rounded border border-red-900/50 p-1.5 text-red-300 hover:bg-red-950/40"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-slate-600">Locked</span>
+                        )}
                       </td>
                     </tr>
                   ))}
