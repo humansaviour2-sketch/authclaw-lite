@@ -53,3 +53,18 @@ SELECT
     count() AS count
 FROM authclaw.audit_events
 GROUP BY tenant_id, event_date, action, provider;
+
+-- Production RBAC guardrails:
+-- - authclaw_audit_writer can append/read audit rows for prior-hash lookup.
+-- - authclaw_audit_reader can query analytics only.
+-- Neither role receives ALTER, DELETE, TRUNCATE, DROP, or OPTIMIZE privileges.
+CREATE ROLE IF NOT EXISTS authclaw_audit_writer;
+CREATE ROLE IF NOT EXISTS authclaw_audit_reader;
+
+GRANT INSERT, SELECT ON authclaw.audit_events TO authclaw_audit_writer;
+GRANT SELECT ON authclaw.audit_events TO authclaw_audit_reader;
+GRANT SELECT ON authclaw.audit_events_daily TO authclaw_audit_reader;
+
+-- Operators should create environment-specific users and attach only one role:
+--   GRANT authclaw_audit_writer TO authclaw_audit_ingest;
+--   GRANT authclaw_audit_reader TO authclaw_audit_analytics;

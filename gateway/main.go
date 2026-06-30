@@ -37,6 +37,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status": "healthy", "service": "authclaw-gateway"}`))
 	})
+	r.Get("/metrics", KafkaMetricsHandler)
 
 	// Setup LLM provider reverse proxy
 	proxy := NewProxyServer()

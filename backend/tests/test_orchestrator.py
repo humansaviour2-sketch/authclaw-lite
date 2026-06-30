@@ -345,11 +345,28 @@ class TestRemediationRollback:
         assert len(sent_events) == 1
         event = sent_events[0]["value"]
         assert sent_events[0]["topic"] == "audit.events"
+        assert sent_events[0]["key"] == "tenant-123"
         assert event["action"] == "workflow:remediation_action_failed"
         assert "workflow_id=workflow-123" in event["execution_trace"]
         assert "transition=REMEDIATION_ACTION_FAILED" in event["execution_trace"]
         assert "action_id=action-123" in event["execution_trace"]
         assert "control=tenant/doc.txt" in event["execution_trace"]
+
+        workflow_runner.emit_audit_event(
+            workflow_id="workflow-123",
+            tenant_id="tenant-123",
+            request_id="request-123",
+            transition="REMEDIATION_ACTION_FAILED",
+            action="remediation_action_failed",
+            status="failed",
+            extra_trace=[
+                "action_id=action-123",
+                "control=tenant/doc.txt",
+                "attempt=3",
+                "error=write failed",
+            ],
+        )
+        assert sent_events[1]["value"]["id"] == event["id"]
 
 
 class TestTenantIsolation:

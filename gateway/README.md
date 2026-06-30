@@ -7,7 +7,7 @@ The AuthClaw Gateway is a high-performance Go-based reverse proxy that intercept
 - **Auth Middleware**: Extracts API keys from the `Authorization: Bearer <key>` header, hashes it with SHA-256, validates it against the control plane PostgreSQL database, and injects the resolved `tenant_id` into the request context.
 - **Payload Normalization**: The adapter layer parses and normalizes provider-specific payloads (like OpenAI chat completions or Anthropic messages) into a generic structure to prepare for security audits and redactions.
 - **Dynamic Routing**: Re-writes request headers and URLs to proxy the requests transparently to downstream endpoints.
-- **Audit Logging**: Emits traffic events (including latency, prompt metrics, and status code) to stdout as a stub for the Kafka backbone.
+- **Audit Logging**: Emits tenant-keyed traffic events with stable event IDs to Kafka (`gateway.traffic`) and falls back to stdout when Kafka is disabled.
 
 ## Provider Compatibility
 

@@ -309,6 +309,7 @@ class AuditLogMetadata(Base):
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
     record_id = Column(UUID(as_uuid=True), nullable=False, unique=True)  # Matches ClickHouse record_id
     actor_id = Column(UUID(as_uuid=True), nullable=True)
+    actor_type = Column(String(100), nullable=False, default="gateway")
     action = Column(String(255), nullable=False)
     request_id = Column(String(255), nullable=True)
     policy_id = Column(UUID(as_uuid=True), nullable=True)
@@ -320,6 +321,7 @@ class AuditLogMetadata(Base):
     response_status = Column(Integer, nullable=False, default=0)
     duration_ms = Column(Integer, nullable=False, default=0)
     frameworks_affected = Column(ARRAY(String), nullable=True)  # GDPR, HIPAA, SOC2
+    execution_trace = Column(Text, nullable=False, default="[]")
     prior_hash = Column(String(64), nullable=True)
     integrity_hash = Column(String(64), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)

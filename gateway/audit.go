@@ -79,6 +79,12 @@ func standardizeAuditTimestamp(ts time.Time) string {
 func canonicalAuditJSON(event *AuditEvent) string {
 	frameworks := append([]string{}, event.FrameworksAffected...)
 	sort.Strings(frameworks)
+	executionTrace := "[]"
+	if len(event.ExecutionTrace) > 0 {
+		if traceBytes, err := json.Marshal(event.ExecutionTrace); err == nil {
+			executionTrace = string(traceBytes)
+		}
+	}
 	payload := map[string]interface{}{
 		"record_id":           canonicalUUID(event.ID),
 		"tenant_id":           canonicalUUID(event.TenantID),
@@ -95,7 +101,7 @@ func canonicalAuditJSON(event *AuditEvent) string {
 		"response_status":     event.ResponseStatus,
 		"duration_ms":         event.DurationMs,
 		"frameworks_affected": frameworks,
-		"execution_trace":     "[]",
+		"execution_trace":     executionTrace,
 		"request_id":          event.RequestID,
 	}
 	data, err := json.Marshal(payload)
@@ -134,16 +140,23 @@ func persistAuditMetadata(event *AuditEvent) {
 			priorHash = auditGenesisHash
 		}
 		integrityHash := hashAuditEvent(event, priorHash)
+		executionTrace := "[]"
+		if len(event.ExecutionTrace) > 0 {
+			if traceBytes, traceErr := json.Marshal(event.ExecutionTrace); traceErr == nil {
+				executionTrace = string(traceBytes)
+			}
+		}
 
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO audit_log_metadata (
 				id, tenant_id, record_id, actor_id, action, request_id, policy_id,
 				provider, model, reason, prompt_count, request_size, response_status,
-				duration_ms, frameworks_affected, created_at, prior_hash, integrity_hash
+				duration_ms, frameworks_affected, created_at, prior_hash, integrity_hash,
+				actor_type, execution_trace
 			)
 			VALUES (
 				gen_random_uuid(), $1, $2::uuid, NULL, $3, $4, NULLIF($5, '')::uuid,
-				$6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+				$6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 			)
 			ON CONFLICT (record_id) DO NOTHING
 		`,
@@ -163,6 +176,8 @@ func persistAuditMetadata(event *AuditEvent) {
 			event.Timestamp,
 			priorHash,
 			integrityHash,
+			"gateway",
+			executionTrace,
 		)
 		return err
 	})

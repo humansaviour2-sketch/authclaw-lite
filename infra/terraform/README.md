@@ -56,6 +56,8 @@ Kafka and ClickHouse are treated as managed external services:
 
 - Set `kafka_brokers` for gateway/backend audit publication.
 - Set `clickhouse_host`, `clickhouse_*`, and `enable_audit_consumer = true` to run the audit consumer.
+- Create MSK topics from `../kafka/topics.yaml`: `gateway.traffic`, `audit.events`, and `audit.deadletter`.
+- Use tenant-keyed partitioning (`tenant_id`) so each tenant's audit chain is consumed in order.
 
 This keeps the regional AuthClaw stack portable while still making the audit path explicit in IaC.
 

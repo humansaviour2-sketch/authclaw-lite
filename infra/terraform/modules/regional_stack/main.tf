@@ -663,11 +663,20 @@ resource "aws_ecs_task_definition" "audit_consumer" {
       image     = var.container_images.audit_consumer
       essential = true
       environment = concat(local.common_environment, [
+        { name = "KAFKA_TOPICS", value = "gateway.traffic,audit.events" },
+        { name = "KAFKA_DLQ_TOPIC", value = "audit.deadletter" },
+        { name = "AUDIT_CONSUMER_METRICS_PORT", value = "9108" },
         { name = "CLICKHOUSE_HOST", value = var.clickhouse_host },
         { name = "CLICKHOUSE_PORT", value = tostring(var.clickhouse_port) },
         { name = "CLICKHOUSE_DB", value = var.clickhouse_db },
         { name = "CLICKHOUSE_USER", value = var.clickhouse_user }
       ])
+      portMappings = [
+        {
+          containerPort = 9108
+          protocol      = "tcp"
+        }
+      ]
       secrets = var.clickhouse_password != "" ? [
         { name = "CLICKHOUSE_PASSWORD", valueFrom = aws_secretsmanager_secret.clickhouse_password[0].arn }
       ] : []

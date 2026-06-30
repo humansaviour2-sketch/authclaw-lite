@@ -18,8 +18,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_tenant_db, require_scopes
+from app.core.auth import get_tenant_db, require_roles, require_scopes
 from app.db.models import AuditLogMetadata
+from app.services.audit_store import (
+    build_consistency_report,
+    clickhouse_configured,
+    replay_postgres_to_clickhouse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +64,18 @@ class AuditLogsResponse(BaseModel):
     total: int
     records: List[Any]
     integrity_checked: bool = False
+
+
+class AuditStoreStatusResponse(BaseModel):
+    analytics_store: str
+    chain_of_record: str
+    clickhouse_configured: bool
+    clickhouse_available: bool
+    detail: str
+
+
+class AuditReplayRequest(BaseModel):
+    dry_run: bool = False
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -222,6 +239,71 @@ def get_audit_logs(
     return _query_postgres(db, tenant_id, limit, offset, action, integrity_check)
 
 
+@router.get(
+    "/store/status",
+    response_model=AuditStoreStatusResponse,
+    dependencies=[require_scopes(["read"])],
+)
+def get_audit_store_status():
+    if not clickhouse_configured():
+        return AuditStoreStatusResponse(
+            analytics_store="postgres_fallback",
+            chain_of_record="postgres",
+            clickhouse_configured=False,
+            clickhouse_available=False,
+            detail="CLICKHOUSE_HOST is not configured; audit reads use Postgres fallback.",
+        )
+    try:
+        ch = _get_clickhouse_client()
+        ch.query("SELECT 1")
+    except Exception as exc:
+        return AuditStoreStatusResponse(
+            analytics_store="clickhouse",
+            chain_of_record="postgres",
+            clickhouse_configured=True,
+            clickhouse_available=False,
+            detail=f"ClickHouse configured but unavailable: {str(exc)}",
+        )
+    return AuditStoreStatusResponse(
+        analytics_store="clickhouse",
+        chain_of_record="postgres",
+        clickhouse_configured=True,
+        clickhouse_available=True,
+        detail="ClickHouse is configured and reachable; Postgres remains chain-of-record.",
+    )
+
+
+@router.get(
+    "/store/consistency",
+    dependencies=[require_scopes(["read"])],
+)
+def get_audit_store_consistency(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+):
+    ch = _get_clickhouse_client()
+    if ch is None:
+        raise HTTPException(status_code=503, detail="ClickHouse is not configured")
+    tenant_id = str(request.state.tenant_id)
+    return build_consistency_report(db, ch, tenant_id).as_dict()
+
+
+@router.post(
+    "/store/replay",
+    dependencies=[require_roles(["owner", "admin"])],
+)
+def replay_audit_store(
+    request: Request,
+    replay: AuditReplayRequest,
+    db: Session = Depends(get_tenant_db),
+):
+    ch = _get_clickhouse_client()
+    if ch is None:
+        raise HTTPException(status_code=503, detail="ClickHouse is not configured")
+    tenant_id = str(request.state.tenant_id)
+    return replay_postgres_to_clickhouse(db, ch, tenant_id, dry_run=replay.dry_run)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # ClickHouse query
 # ──────────────────────────────────────────────────────────────────────────────
@@ -329,7 +411,7 @@ def _query_postgres(
                 "tenant_id": str(log.tenant_id),
                 "timestamp": log.created_at.isoformat() if log.created_at else None,
                 "actor_id": str(log.actor_id) if log.actor_id else "",
-                "actor_type": "gateway",
+                "actor_type": getattr(log, "actor_type", None) or "gateway",
                 "action": log.action,
                 "policy_id": str(log.policy_id) if log.policy_id else "",
                 "provider": log.provider or "",
@@ -340,6 +422,7 @@ def _query_postgres(
                 "response_status": log.response_status or 0,
                 "duration_ms": log.duration_ms or 0,
                 "frameworks_affected": log.frameworks_affected,
+                "execution_trace": getattr(log, "execution_trace", "[]") or "[]",
                 "created_at": log.created_at.isoformat() if log.created_at else None,
                 "request_id": log.request_id or "",
                 "prior_hash": log.prior_hash or "",

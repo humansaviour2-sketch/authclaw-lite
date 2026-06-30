@@ -15,8 +15,33 @@ import json
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch, call
 
-from consumer import normalise_event, _process_message, publish_to_dlq
+import pytest
+
+from consumer import normalise_event, _process_message, publish_to_dlq, stable_record_id
 from hash_chain import GENESIS_HASH, compute_integrity_hash
+
+
+class FakeRedis:
+    def __init__(self):
+        self.values = {}
+
+    def get(self, key):
+        return self.values.get(key)
+
+    def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.values:
+            return False
+        self.values[key] = value
+        return True
+
+    def delete(self, key):
+        self.values.pop(key, None)
+
+
+@pytest.fixture(autouse=True)
+def isolated_tail_hash_cache(monkeypatch):
+    monkeypatch.setattr("consumer.redis_client", FakeRedis())
+    monkeypatch.setattr("consumer.audit_event_exists", lambda _ch_client, _record_id: False)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -81,6 +106,12 @@ class TestNormaliseEvent:
         row = normalise_event(payload)
         assert row["request_id"] == ""
 
+    def test_gateway_identity_defaults_match_postgres_chain(self):
+        payload = gateway_payload()
+        row = normalise_event(payload)
+        assert row["actor_id"] == ""
+        assert row["actor_type"] == "gateway"
+
     def test_timestamp_parsed_as_datetime(self):
         payload = gateway_payload()
         row = normalise_event(payload)
@@ -91,6 +122,11 @@ class TestNormaliseEvent:
         del payload["id"]
         row = normalise_event(payload)
         assert row["record_id"]  # non-empty UUID generated
+
+    def test_missing_id_generates_stable_uuid_for_same_payload(self):
+        payload = gateway_payload()
+        del payload["id"]
+        assert stable_record_id(payload) == stable_record_id(dict(payload))
 
     def test_frameworks_affected_preserved(self):
         payload = gateway_payload()
@@ -200,6 +236,29 @@ class TestProcessMessage:
 
         inserted_row = mock_insert.call_args[0][1]
         assert inserted_row["request_id"] == ""
+
+    @patch("consumer.get_prior_hash", return_value=GENESIS_HASH)
+    @patch("consumer.insert_audit_event")
+    def test_duplicate_record_id_skips_insert(self, mock_insert, mock_prior, monkeypatch):
+        ch_client = MagicMock()
+        payload = gateway_payload(tenant_id="tenant-dup", record_id="11111111-1111-4111-8111-111111111111")
+        monkeypatch.setattr("consumer.audit_event_exists", lambda _client, _record_id: True)
+
+        _process_message(ch_client, payload)
+
+        mock_prior.assert_not_called()
+        mock_insert.assert_not_called()
+
+    @patch("consumer.get_prior_hash", return_value=GENESIS_HASH)
+    @patch("consumer.insert_audit_event", return_value=True)
+    def test_replayed_message_after_restart_does_not_insert_twice(self, mock_insert, mock_prior):
+        ch_client = MagicMock()
+        payload = gateway_payload(tenant_id="tenant-replay", record_id="11111111-1111-4111-8111-222222222222")
+
+        _process_message(ch_client, payload)
+        _process_message(ch_client, payload)
+
+        assert mock_insert.call_count == 1
 
 
 # ──────────────────────────────────────────────────────────────────────────────
