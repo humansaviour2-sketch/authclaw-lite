@@ -1,6 +1,6 @@
 """Pydantic schemas for request/response validation"""
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from uuid import UUID
 from pydantic import BaseModel, EmailStr, Field
 
@@ -92,6 +92,7 @@ class PolicyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     policy_yaml: str = Field(..., min_length=10)
+    activate: bool = True
 
 
 class PolicyResponse(BaseModel):
@@ -142,6 +143,48 @@ class GatewayConfigResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class PolicyValidationRequest(BaseModel):
+    """Validate policy YAML before activation."""
+    policy_yaml: str = Field(..., min_length=1)
+
+
+class PolicyValidationResponse(BaseModel):
+    valid: bool
+    errors: List[Dict[str, str]] = []
+    warnings: List[Dict[str, str]] = []
+    normalized_policy: Optional[Dict[str, Any]] = None
+    stats: Optional[Dict[str, Any]] = None
+
+
+class PolicySimulationRequest(BaseModel):
+    """Dry-run a policy decision without changing active policy state."""
+    policy_yaml: Optional[str] = None
+    policy_id: Optional[UUID] = None
+    model: str = Field(..., min_length=1, max_length=255)
+    route: str = Field(default="/v1/chat/completions", max_length=512)
+    prompts: List[str] = Field(default_factory=list)
+    topics: List[str] = Field(default_factory=list)
+    rate_limit_exceeded: bool = False
+
+
+class PolicySimulationResponse(BaseModel):
+    decision: str
+    allow: bool
+    reason: str
+    policy_id: Optional[UUID] = None
+    policy_version: Optional[int] = None
+    policy_name: Optional[str] = None
+    explanations: List[Dict[str, Any]]
+    matched_rules: List[Dict[str, Any]]
+    validation: PolicyValidationResponse
+
+
+class PolicyRollbackRequest(BaseModel):
+    """Activate an older policy version."""
+    policy_id: Optional[UUID] = None
+    version: Optional[int] = Field(default=None, ge=1)
 
 
 class ProviderCredentialCreate(BaseModel):

@@ -17,6 +17,21 @@ class BackendRequestError extends Error {
 function apiErrorMessage(data: any, fallback: string): string {
   const candidate = data?.detail ?? data?.message ?? data?.error;
   if (typeof candidate === "string") return candidate;
+  if (candidate && typeof candidate === "object") {
+    if (typeof candidate.message === "string") {
+      const errors = Array.isArray(candidate.errors)
+        ? candidate.errors
+            .map((item: any) => {
+              if (!item || typeof item !== "object") return "";
+              const path = typeof item.path === "string" ? item.path : "policy";
+              const message = typeof item.message === "string" ? item.message : "";
+              return message ? `${path}: ${message}` : "";
+            })
+            .filter(Boolean)
+        : [];
+      return errors.length ? `${candidate.message}: ${errors.join("; ")}` : candidate.message;
+    }
+  }
   if (Array.isArray(candidate)) {
     const messages = candidate
       .map((item) => {

@@ -14,7 +14,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-import clickhouse_connect
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -67,13 +66,19 @@ class AuditLogsResponse(BaseModel):
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _get_clickhouse_client() -> Optional[clickhouse_connect.driver.Client]:
+def _get_clickhouse_client() -> Optional[Any]:
     """Return a ClickHouse client, or None if CLICKHOUSE_HOST is not configured.
     Bubbles up exceptions if host is configured but connection fails.
     """
     host = os.getenv("CLICKHOUSE_HOST")
     if not host:
         return None
+    try:
+        import clickhouse_connect
+    except ImportError as exc:
+        raise RuntimeError(
+            "clickhouse_connect is required when CLICKHOUSE_HOST is configured"
+        ) from exc
     return clickhouse_connect.get_client(
         host=host,
         port=int(os.getenv("CLICKHOUSE_PORT", "8123")),
@@ -223,7 +228,7 @@ def get_audit_logs(
 
 
 def _query_clickhouse(
-    ch: clickhouse_connect.driver.Client,
+    ch: Any,
     tenant_id: str,
     limit: int,
     offset: int,

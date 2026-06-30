@@ -6,7 +6,9 @@ import {
   Check,
   FileText,
   History,
+  Play,
   Plus,
+  RotateCcw,
   Save,
   ShieldAlert,
   Trash2,
@@ -36,6 +38,30 @@ interface ParsedPolicyYaml {
   rules: RedactionRule[];
   modelWhitelist: string[];
   requestsPerMinute?: number;
+}
+
+interface PolicyValidationResult {
+  valid: boolean;
+  errors: Array<{ path: string; message: string }>;
+  warnings: Array<{ path: string; message: string }>;
+  stats?: Record<string, number | string | boolean>;
+}
+
+interface PolicySimulationResult {
+  decision: "allow" | "block" | "require_approval";
+  allow: boolean;
+  reason: string;
+  explanations: Array<{
+    stage: string;
+    outcome: string;
+    message: string;
+    rule_name?: string;
+    rule_type?: string;
+    severity?: string;
+    prompt_index?: number;
+    matched_text_preview?: string;
+  }>;
+  matched_rules: Array<Record<string, string | number | boolean>>;
 }
 
 const defaultRules: RedactionRule[] = [
@@ -233,9 +259,17 @@ export default function PoliciesPage() {
   const [activeYaml, setActiveYaml] = useState("");
   const [history, setHistory] = useState<PolicyVersion[]>([]);
   const [saving, setSaving] = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [simulating, setSimulating] = useState(false);
+  const [activatingId, setActivatingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [validationResult, setValidationResult] = useState<PolicyValidationResult | null>(null);
+  const [simulationResult, setSimulationResult] = useState<PolicySimulationResult | null>(null);
+  const [simulationModel, setSimulationModel] = useState("gemini-2.5-flash-lite");
+  const [simulationPrompt, setSimulationPrompt] = useState("My patient diagnosis is confidential.");
+  const [simulationTopics, setSimulationTopics] = useState("");
 
   const modelWhitelist = useMemo(
     () => modelInput.split(",").map((model) => model.trim()).filter(Boolean),
@@ -327,6 +361,7 @@ export default function PoliciesPage() {
           name: policyName,
           description: policyDesc,
           policy_yaml: generatedYaml,
+          activate: true,
         }),
       });
       const data = await res.json();
@@ -343,6 +378,105 @@ export default function PoliciesPage() {
     }
   };
 
+  const validateGeneratedPolicy = async () => {
+    setValidating(true);
+    setError(null);
+    setMessage(null);
+    setValidationResult(null);
+    try {
+      const res = await fetch("/api/policies/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ policy_yaml: generatedYaml }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || data.detail?.message || "Policy validation failed");
+      }
+      setValidationResult(data);
+      setMessage(data.valid ? "Policy validation passed." : "Policy validation returned issues.");
+    } catch (err: unknown) {
+      setError(errorMessage(err, "Failed to validate policy"));
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  const simulateGeneratedPolicy = async () => {
+    setSimulating(true);
+    setError(null);
+    setMessage(null);
+    setSimulationResult(null);
+    try {
+      const res = await fetch("/api/policies/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          policy_yaml: generatedYaml,
+          model: simulationModel,
+          route: "/v1/chat/completions",
+          prompts: [simulationPrompt],
+          topics: simulationTopics.split(",").map((topic) => topic.trim()).filter(Boolean),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || data.detail?.message || "Policy simulation failed");
+      }
+      setValidationResult(data.validation);
+      setSimulationResult(data);
+      setMessage(`Simulation result: ${data.decision.replace("_", " ")}.`);
+    } catch (err: unknown) {
+      setError(errorMessage(err, "Failed to simulate policy"));
+    } finally {
+      setSimulating(false);
+    }
+  };
+
+  const activateVersion = async (id: string) => {
+    setActivatingId(id);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/policies/${id}/activate`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || data.detail || "Failed to activate policy");
+      }
+      setActiveYaml(data.policy_yaml || activeYaml);
+      setMessage(`Policy v${data.version} activated.`);
+      await fetchHistory();
+    } catch (err: unknown) {
+      setError(errorMessage(err, "Failed to activate policy version"));
+    } finally {
+      setActivatingId(null);
+    }
+  };
+
+  const rollbackPrevious = async () => {
+    setActivatingId("rollback");
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/policies/rollback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || data.detail || "Failed to rollback policy");
+      }
+      setActiveYaml(data.policy_yaml || activeYaml);
+      setMessage(`Rolled back to policy v${data.version}.`);
+      await fetchHistory();
+    } catch (err: unknown) {
+      setError(errorMessage(err, "Failed to rollback policy"));
+    } finally {
+      setActivatingId(null);
+    }
+  };
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
@@ -352,14 +486,32 @@ export default function PoliciesPage() {
             Build easy gateway rules for redaction, human approval, or immediate blocking.
           </p>
         </div>
-        <button
-          onClick={() => void savePolicy()}
-          disabled={saving || loading || rules.length === 0}
-          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg transition disabled:opacity-50"
-        >
-          <Save className="w-4 h-4" />
-          {saving ? "Deploying..." : "Validate & Deploy"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => void validateGeneratedPolicy()}
+            disabled={validating || loading}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs transition disabled:opacity-50"
+          >
+            <Check className="w-4 h-4" />
+            {validating ? "Validating..." : "Validate"}
+          </button>
+          <button
+            onClick={() => void simulateGeneratedPolicy()}
+            disabled={simulating || loading}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs transition disabled:opacity-50"
+          >
+            <Play className="w-4 h-4" />
+            {simulating ? "Simulating..." : "Dry Run"}
+          </button>
+          <button
+            onClick={() => void savePolicy()}
+            disabled={saving || loading || rules.length === 0}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-lg transition disabled:opacity-50"
+          >
+            <Save className="w-4 h-4" />
+            {saving ? "Deploying..." : "Validate & Deploy"}
+          </button>
+        </div>
       </div>
 
       {message && (
@@ -431,6 +583,41 @@ export default function PoliciesPage() {
                 max={1000}
                 value={requestsPerMinute}
                 onChange={(event) => setRequestsPerMinute(Number(event.target.value))}
+                className="w-full px-3 py-2 rounded-lg bg-[#07070a] border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+              />
+            </label>
+          </div>
+
+          <div className="rounded-lg bg-[#09090d] border border-slate-800 p-5 space-y-4">
+            <div className="flex items-center gap-2 text-white text-sm font-bold">
+              <Play className="w-4 h-4 text-indigo-400" />
+              Dry-Run Simulation
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label className="block">
+                <span className="block text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-1.5">Model</span>
+                <input
+                  value={simulationModel}
+                  onChange={(event) => setSimulationModel(event.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-[#07070a] border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+                />
+              </label>
+              <label className="block">
+                <span className="block text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-1.5">Topics</span>
+                <input
+                  value={simulationTopics}
+                  onChange={(event) => setSimulationTopics(event.target.value)}
+                  placeholder="medical, finance"
+                  className="w-full px-3 py-2 rounded-lg bg-[#07070a] border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
+                />
+              </label>
+            </div>
+            <label className="block">
+              <span className="block text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-1.5">Prompt</span>
+              <textarea
+                value={simulationPrompt}
+                onChange={(event) => setSimulationPrompt(event.target.value)}
+                rows={3}
                 className="w-full px-3 py-2 rounded-lg bg-[#07070a] border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-indigo-500"
               />
             </label>
@@ -512,6 +699,59 @@ export default function PoliciesPage() {
         </section>
 
         <aside className="space-y-4">
+          {validationResult && (
+            <section className="rounded-lg bg-[#09090d] border border-slate-800 p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Check className={validationResult.valid ? "w-4 h-4 text-emerald-400" : "w-4 h-4 text-red-400"} />
+                <h2 className="text-sm font-bold text-white">Validation</h2>
+              </div>
+              <p className={`text-xs font-semibold ${validationResult.valid ? "text-emerald-300" : "text-red-300"}`}>
+                {validationResult.valid ? "Valid and activation-safe" : "Invalid policy"}
+              </p>
+              {validationResult.errors.length > 0 && (
+                <div className="mt-3 space-y-1">
+                  {validationResult.errors.map((item, idx) => (
+                    <p key={`${item.path}-${idx}`} className="text-[11px] text-red-200">
+                      {item.path}: {item.message}
+                    </p>
+                  ))}
+                </div>
+              )}
+              {validationResult.warnings.length > 0 && (
+                <div className="mt-3 space-y-1">
+                  {validationResult.warnings.map((item, idx) => (
+                    <p key={`${item.path}-${idx}`} className="text-[11px] text-amber-200">
+                      {item.path}: {item.message}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
+          {simulationResult && (
+            <section className="rounded-lg bg-[#09090d] border border-slate-800 p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Play className="w-4 h-4 text-indigo-400" />
+                <h2 className="text-sm font-bold text-white">Dry-Run Result</h2>
+              </div>
+              <p className={`text-xs font-bold uppercase ${
+                simulationResult.decision === "allow" ? "text-emerald-300" : simulationResult.decision === "block" ? "text-red-300" : "text-amber-300"
+              }`}>
+                {simulationResult.decision.replace("_", " ")}
+              </p>
+              <p className="text-xs text-slate-400 mt-2">{simulationResult.reason}</p>
+              <div className="mt-3 space-y-2">
+                {simulationResult.explanations.slice(0, 5).map((item, idx) => (
+                  <div key={`${item.stage}-${idx}`} className="rounded border border-slate-800 bg-[#07070a] p-2">
+                    <p className="text-[10px] uppercase text-slate-500">{item.stage} / {item.outcome}</p>
+                    <p className="text-[11px] text-slate-300 mt-1">{item.message}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           <section className="rounded-lg bg-[#09090d] border border-slate-800 overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-800 flex items-center gap-2">
               <FileText className="w-4 h-4 text-indigo-400" />
@@ -527,6 +767,14 @@ export default function PoliciesPage() {
               <History className="w-4 h-4 text-indigo-400" />
               <h2 className="text-sm font-bold text-white">Deploy History</h2>
             </div>
+            <button
+              onClick={() => void rollbackPrevious()}
+              disabled={activatingId === "rollback" || history.filter((item) => !item.is_active).length === 0}
+              className="mb-3 inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 disabled:opacity-50"
+            >
+              <RotateCcw className="w-4 h-4" />
+              {activatingId === "rollback" ? "Rolling back..." : "Rollback Previous"}
+            </button>
             {history.length === 0 ? (
               <p className="text-xs text-slate-500">No saved policy versions yet.</p>
             ) : (
@@ -535,9 +783,21 @@ export default function PoliciesPage() {
                   <div key={policy.id} className="rounded border border-slate-800 bg-[#07070a] px-3 py-2">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-semibold text-slate-200 truncate">{policy.name}</span>
-                      <span className="text-[10px] text-slate-500">v{policy.version}</span>
+                      <span className={`text-[10px] ${policy.is_active ? "text-emerald-300" : "text-slate-500"}`}>
+                        v{policy.version}{policy.is_active ? " active" : ""}
+                      </span>
                     </div>
                     <p className="text-[10px] text-slate-600 mt-1">{new Date(policy.created_at).toLocaleString()}</p>
+                    {!policy.is_active && (
+                      <button
+                        onClick={() => void activateVersion(policy.id)}
+                        disabled={Boolean(activatingId)}
+                        className="mt-2 inline-flex items-center gap-1 px-2 py-1 rounded bg-indigo-600/20 hover:bg-indigo-600/30 text-[10px] font-semibold text-indigo-200 disabled:opacity-50"
+                      >
+                        <Check className="w-3 h-3" />
+                        {activatingId === policy.id ? "Activating..." : "Activate"}
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

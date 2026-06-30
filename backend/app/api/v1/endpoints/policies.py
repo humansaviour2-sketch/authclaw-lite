@@ -1,133 +1,128 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import text
-import yaml
-import re
 import os
-import redis
+from uuid import UUID
 
 from app.db.models import Policy
-from app.schemas.models import PolicyCreate, PolicyResponse, PolicyDetailResponse
+from app.schemas.models import (
+    PolicyCreate,
+    PolicyResponse,
+    PolicyDetailResponse,
+    PolicyValidationRequest,
+    PolicyValidationResponse,
+    PolicySimulationRequest,
+    PolicySimulationResponse,
+    PolicyRollbackRequest,
+)
 from app.core.auth import get_tenant_db, require_roles, require_scopes
+from app.services.policy_engine import PolicyValidationError, validate_policy_yaml as validate_policy_document, simulate_policy
 
 router = APIRouter()
 
 
+def _validation_http_error(exc: PolicyValidationError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "message": "Policy validation failed",
+            "errors": exc.errors,
+            "warnings": exc.warnings,
+        },
+    )
+
+
 def validate_policy_yaml(yaml_str: str):
-    """Validate YAML parsing and regex compilation within policy config"""
+    """Validate YAML parsing and policy semantics within policy config."""
     try:
-        config = yaml.safe_load(yaml_str)
-    except Exception as e:
+        return validate_policy_document(yaml_str)
+    except PolicyValidationError as exc:
+        raise _validation_http_error(exc)
+
+
+def _publish_policy_invalidation(tenant_id):
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    try:
+        import redis
+
+        if redis_url and not redis_url.startswith("redis://") and not redis_url.startswith("rediss://"):
+            redis_url = f"redis://{redis_url}"
+        r_client = redis.from_url(redis_url)
+        r_client.publish("policy_invalidation", str(tenant_id))
+    except Exception as re_err:
+        print(f"[WARN] Failed to publish policy invalidation to Redis: {re_err}")
+
+
+def _activate_policy(db: Session, tenant_id, policy: Policy) -> None:
+    db.query(Policy).filter(Policy.tenant_id == tenant_id, Policy.is_active == True).update(
+        {Policy.is_active: False},
+        synchronize_session=False,
+    )
+    policy.is_active = True
+    db.flush()
+
+
+def _policy_validation_response(policy_yaml: str) -> PolicyValidationResponse:
+    try:
+        report = validate_policy_document(policy_yaml)
+        return PolicyValidationResponse(**report)
+    except PolicyValidationError as exc:
+        return PolicyValidationResponse(valid=False, errors=exc.errors, warnings=exc.warnings)
+
+
+@router.post("/validate", response_model=PolicyValidationResponse, dependencies=[require_scopes(["read"])])
+def validate_policy(policy_in: PolicyValidationRequest):
+    """Validate policy YAML without saving it."""
+    return _policy_validation_response(policy_in.policy_yaml)
+
+
+@router.post("/simulate", response_model=PolicySimulationResponse, dependencies=[require_scopes(["read"])])
+def simulate_policy_decision(
+    request: Request,
+    simulation: PolicySimulationRequest,
+    db: Session = Depends(get_tenant_db),
+):
+    """Dry-run policy evaluation with explanations and matched rules."""
+    tenant_id = request.state.tenant_id
+    policy = None
+    if simulation.policy_yaml:
+        policy_yaml = simulation.policy_yaml
+    elif simulation.policy_id:
+        policy = db.query(Policy).filter(Policy.tenant_id == tenant_id, Policy.id == simulation.policy_id).first()
+        if not policy:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy not found")
+        policy_yaml = policy.policy_yaml
+    else:
+        policy = db.query(Policy).filter(Policy.tenant_id == tenant_id, Policy.is_active == True).first()
+        if not policy:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active policy found")
+        policy_yaml = policy.policy_yaml
+
+    validation = _policy_validation_response(policy_yaml)
+    if not validation.valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid YAML syntax: {str(e)}"
+            detail={
+                "message": "Cannot simulate an invalid policy",
+                "errors": validation.errors,
+                "warnings": validation.warnings,
+            },
         )
 
-    if not isinstance(config, dict):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Policy YAML must be a dictionary/object"
-        )
-
-    model_rules = config.get("model_rules", {})
-    if model_rules is not None:
-        if not isinstance(model_rules, dict):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="model_rules must be an object"
-            )
-        for field in ("whitelist", "blacklist"):
-            values = model_rules.get(field, [])
-            if values is None:
-                continue
-            if not isinstance(values, list) or any(not isinstance(item, str) or not item.strip() for item in values):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"model_rules.{field} must be a list of non-empty strings"
-                )
-
-    regex_rules = config.get("regex_rules", [])
-    if not isinstance(regex_rules, list):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="regex_rules must be a list"
-        )
-
-    for idx, rule in enumerate(regex_rules):
-        if not isinstance(rule, dict):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"regex_rules[{idx}] must be an object"
-            )
-        pattern = rule.get("pattern")
-        if not pattern or not isinstance(pattern, str):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"regex_rules[{idx}] missing pattern string"
-            )
-        try:
-            re.compile(pattern)
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid regex pattern in regex_rules[{idx}]: {str(e)}"
-            )
-
-        action = rule.get("action", "redact")
-        if action not in ("redact", "require_approval", "block"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"regex_rules[{idx}] action must be redact, require_approval, or block"
-            )
-
-        timeout = rule.get("hitl_timeout_seconds", 1800)
-        if action == "require_approval":
-            if not isinstance(timeout, int) or timeout < 10 or timeout > 1800:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"regex_rules[{idx}] hitl_timeout_seconds must be an integer between 10 and 1800"
-                )
-
-    topic_rules = config.get("topic_rules", [])
-    if topic_rules is None:
-        topic_rules = []
-    if not isinstance(topic_rules, list):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="topic_rules must be a list"
-        )
-    for idx, rule in enumerate(topic_rules):
-        if not isinstance(rule, dict):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"topic_rules[{idx}] must be an object"
-            )
-        topic = rule.get("topic")
-        if not isinstance(topic, str) or not topic.strip():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"topic_rules[{idx}] missing topic string"
-            )
-        allowed_models = rule.get("allowed_models")
-        if not isinstance(allowed_models, list) or any(not isinstance(item, str) or not item.strip() for item in allowed_models):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"topic_rules[{idx}].allowed_models must be a list of non-empty strings"
-            )
-
-    rate_limits = config.get("rate_limits", {})
-    if rate_limits is not None:
-        if not isinstance(rate_limits, dict):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="rate_limits must be an object"
-            )
-        rpm = rate_limits.get("requests_per_minute", 0)
-        if not isinstance(rpm, int) or rpm < 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="rate_limits.requests_per_minute must be a non-negative integer"
-            )
+    result = simulate_policy(
+        policy_yaml,
+        model=simulation.model,
+        route=simulation.route,
+        prompts=simulation.prompts,
+        topics=simulation.topics,
+        rate_limit_exceeded=simulation.rate_limit_exceeded,
+    )
+    return PolicySimulationResponse(
+        **result.as_dict(),
+        policy_id=policy.id if policy else simulation.policy_id,
+        policy_version=policy.version if policy else None,
+        policy_name=policy.name if policy else None,
+        validation=validation,
+    )
 
 
 @router.post("", response_model=PolicyResponse, status_code=status.HTTP_201_CREATED, dependencies=[require_roles(["owner", "admin"])])
@@ -140,7 +135,7 @@ def upload_policy(
     tenant_id = request.state.tenant_id
     user_id = request.state.user_id
 
-    # 1. Validate YAML syntax and compiled regular expressions
+    # 1. Validate YAML syntax, schema, regexes, and activation safety
     validate_policy_yaml(policy_in.policy_yaml)
 
     try:
@@ -150,21 +145,20 @@ def upload_policy(
         if existing_policies:
             next_version = max(p.version for p in existing_policies) + 1
 
-        # 3. Deactivate previous policies for this tenant
-        db.query(Policy).filter(Policy.tenant_id == tenant_id).update({Policy.is_active: False})
-
-        # 4. Insert new active policy
+        # 3. Insert new version. It may be activated immediately or saved as a draft.
         policy = Policy(
             tenant_id=tenant_id,
             name=policy_in.name,
             description=policy_in.description,
             policy_yaml=policy_in.policy_yaml,
             version=next_version,
-            is_active=True,
+            is_active=False,
             created_by=user_id
         )
         db.add(policy)
         db.flush()
+        if policy_in.activate:
+            _activate_policy(db, tenant_id, policy)
         response = {
             "id": policy.id,
             "name": policy.name,
@@ -174,17 +168,8 @@ def upload_policy(
         }
         db.commit()
 
-        # 5. Publish invalidation event to Redis Pub/Sub to trigger Go gateway hot reload
-        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-        try:
-            # Parse URL format differences
-            if redis_url and not redis_url.startswith("redis://"):
-                redis_url = f"redis://{redis_url}"
-            r_client = redis.from_url(redis_url)
-            r_client.publish("policy_invalidation", str(tenant_id))
-        except Exception as re_err:
-            # Non-blocking log: cache invalidation issues should not cause client request failure
-            print(f"[WARN] Failed to publish policy invalidation to Redis: {re_err}")
+        if policy_in.activate:
+            _publish_policy_invalidation(tenant_id)
 
         return response
     except HTTPException:
@@ -220,4 +205,70 @@ def get_active_policy(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No active policy found"
         )
+    return policy
+
+
+@router.post("/rollback", response_model=PolicyDetailResponse, dependencies=[require_roles(["owner", "admin"])])
+def rollback_policy(
+    request: Request,
+    rollback: PolicyRollbackRequest,
+    db: Session = Depends(get_tenant_db),
+):
+    """Rollback by activating a previous policy version."""
+    tenant_id = request.state.tenant_id
+    query = db.query(Policy).filter(Policy.tenant_id == tenant_id)
+    if rollback.policy_id:
+        policy = query.filter(Policy.id == rollback.policy_id).first()
+    elif rollback.version is not None:
+        policy = query.filter(Policy.version == rollback.version).first()
+    else:
+        active = query.filter(Policy.is_active == True).first()
+        active_version = active.version if active else 10**9
+        policy = query.filter(Policy.version < active_version).order_by(Policy.version.desc()).first()
+
+    if not policy:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rollback target policy not found")
+    validate_policy_yaml(policy.policy_yaml)
+    try:
+        _activate_policy(db, tenant_id, policy)
+        db.commit()
+        _publish_policy_invalidation(tenant_id)
+        return policy
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to rollback policy: {exc}")
+
+
+@router.post("/{policy_id}/activate", response_model=PolicyDetailResponse, dependencies=[require_roles(["owner", "admin"])])
+def activate_policy(
+    request: Request,
+    policy_id: UUID,
+    db: Session = Depends(get_tenant_db),
+):
+    """Activate a validated policy version and atomically deactivate the previous active version."""
+    tenant_id = request.state.tenant_id
+    policy = db.query(Policy).filter(Policy.tenant_id == tenant_id, Policy.id == policy_id).first()
+    if not policy:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy not found")
+    validate_policy_yaml(policy.policy_yaml)
+    try:
+        _activate_policy(db, tenant_id, policy)
+        db.commit()
+        _publish_policy_invalidation(tenant_id)
+        return policy
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to activate policy: {exc}")
+
+
+@router.get("/{policy_id}", response_model=PolicyDetailResponse, dependencies=[require_scopes(["read"])])
+def get_policy(
+    request: Request,
+    policy_id: UUID,
+    db: Session = Depends(get_tenant_db),
+):
+    tenant_id = request.state.tenant_id
+    policy = db.query(Policy).filter(Policy.tenant_id == tenant_id, Policy.id == policy_id).first()
+    if not policy:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy not found")
     return policy
