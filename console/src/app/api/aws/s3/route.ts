@@ -17,7 +17,7 @@ export async function GET() {
     }
     const data = await backendFetch("/v1/aws/s3/documents");
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }
@@ -34,7 +34,7 @@ export async function POST() {
     }
     const data = await backendFetch("/v1/aws/s3/sync", { method: "POST" });
     return NextResponse.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }

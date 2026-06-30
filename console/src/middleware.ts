@@ -4,7 +4,7 @@ import type { NextRequest } from "next/server";
 export function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const demoMode = process.env.NEXT_PUBLIC_AUTHCLAW_DEMO_MODE !== "false";
-  const demoBlockedPaths = ["/agent", "/frameworks", "/evidence", "/findings", "/aws"];
+  const demoBlockedPaths = ["/frameworks", "/evidence", "/findings", "/aws"];
   
   // 1. Define public and asset paths
   const isPublicPath = path === "/login" || path === "/signup" || path.startsWith("/api/auth");

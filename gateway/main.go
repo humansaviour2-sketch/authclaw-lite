@@ -14,6 +14,10 @@ func main() {
 	// Try to load .env.local from parent directory
 	_ = godotenv.Load("../.env.local")
 
+	if err := ValidateEnvelopeKeyConfig(); err != nil {
+		log.Fatalf("Invalid secret management configuration: %v", err)
+	}
+
 	// Initialize database
 	InitDB()
 
@@ -33,6 +37,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status": "healthy", "service": "authclaw-gateway"}`))
 	})
+	r.Get("/metrics", KafkaMetricsHandler)
 
 	// Setup LLM provider reverse proxy
 	proxy := NewProxyServer()

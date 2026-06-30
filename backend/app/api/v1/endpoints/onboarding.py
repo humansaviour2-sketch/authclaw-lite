@@ -62,7 +62,7 @@ STARTER_POLICY = r'''regex_rules:
     reason: "Health context requires human approval before model egress."
     severity: high
     action: require_approval
-    hitl_timeout_seconds: 300
+    hitl_timeout_seconds: 1800
 
   - name: ssn_block
     pattern: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
@@ -442,6 +442,7 @@ def verify(payload: OnboardingVerifyRequest, request: Request):
                 description="Issued during AuthClaw Lite tenant invite verification",
                 scopes=_scopes_for_role(invited_role),
                 is_active=True,
+                expires_at=now + timedelta(days=90),
                 created_by=user.id,
             )
             db.add(api_key)
@@ -510,6 +511,7 @@ def verify(payload: OnboardingVerifyRequest, request: Request):
             description="Issued during AuthClaw Lite onboarding",
             scopes=["admin", "read", "write"],
             is_active=True,
+            expires_at=now + timedelta(days=90),
             created_by=user.id,
         )
         db.add(api_key)
@@ -521,6 +523,7 @@ def verify(payload: OnboardingVerifyRequest, request: Request):
             endpoint=DEFAULT_ENDPOINT,
             model_whitelist=[DEFAULT_MODEL],
             redaction_strategy="mask",
+            redaction_token_retention_days=90,
             is_active=True,
         )
         db.add(gateway)

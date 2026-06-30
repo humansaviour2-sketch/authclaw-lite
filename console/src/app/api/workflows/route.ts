@@ -4,6 +4,19 @@ import { queryWithTenantContext } from "@/lib/db";
 import { backendFetch, handleApiError } from "@/lib/api-client";
 import { sessionStore } from "@/lib/session-store";
 
+type WorkflowRow = {
+  state_data?: {
+    remediation_state?: string;
+    remediation_actions?: unknown[];
+    rollback_result?: unknown;
+  } | null;
+  execution_result?: {
+    remediation_state?: string;
+    actions?: unknown[];
+  } | null;
+  [key: string]: unknown;
+};
+
 export async function GET() {
   try {
     const cookieStore = await cookies();
@@ -25,7 +38,13 @@ export async function GET() {
     // Fetch compliance workflows
     const workflowsRes = await queryWithTenantContext(
       tenantId,
-      "SELECT id, workflow_id, framework, current_state, execution_status, risk_score, started_at, completed_at, approval_id FROM compliance_workflows WHERE tenant_id = $1 ORDER BY started_at DESC LIMIT 50",
+      `SELECT id, workflow_id, framework, current_state, execution_status, risk_score,
+              findings, remediation_plan, execution_result, error_message, retry_count,
+              state_data, started_at, completed_at, approval_id
+       FROM compliance_workflows
+       WHERE tenant_id = $1
+       ORDER BY started_at DESC
+       LIMIT 50`,
       [tenantId]
     );
 
@@ -36,11 +55,22 @@ export async function GET() {
       [tenantId]
     );
 
+    const workflows = workflowsRes.rows.map((workflow: WorkflowRow) => {
+      const stateData = workflow.state_data || {};
+      const executionResult = workflow.execution_result || {};
+      return {
+        ...workflow,
+        remediation_state: stateData.remediation_state || executionResult.remediation_state || null,
+        remediation_actions: stateData.remediation_actions || executionResult.actions || [],
+        rollback_result: stateData.rollback_result || null,
+      };
+    });
+
     return NextResponse.json({
-      workflows: workflowsRes.rows,
+      workflows,
       approvals: approvalsRes.rows,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }
@@ -53,7 +83,7 @@ export async function POST(request: Request) {
       body: JSON.stringify(body),
     });
     return NextResponse.json(data, { status: 201 });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }

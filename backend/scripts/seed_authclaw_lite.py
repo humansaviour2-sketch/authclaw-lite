@@ -31,7 +31,7 @@ STARTER_POLICY = r'''regex_rules:
     reason: "Health context requires human approval before model egress."
     severity: high
     action: require_approval
-    hitl_timeout_seconds: 300
+    hitl_timeout_seconds: 1800
 
   - name: ssn_block
     pattern: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
@@ -95,14 +95,17 @@ def main() -> None:
 
         conn.execute(
             text("""
-            INSERT INTO api_keys (id, tenant_id, key_hash, name, description, scopes, is_active, created_by)
+            INSERT INTO api_keys (id, tenant_id, key_hash, name, description, scopes, is_active, expires_at, created_by)
             VALUES (
                 :id, :tenant_id, :key_hash, 'AuthClaw Lite Demo Key',
                 'Seeded key for local/AWS Lite demo',
-                ARRAY['admin','read','write'], true, :created_by
+                ARRAY['admin','read','write'], true, NOW() + INTERVAL '90 days', :created_by
             )
             ON CONFLICT (key_hash) DO UPDATE SET
                 is_active = true,
+                expires_at = NOW() + INTERVAL '90 days',
+                revoked_at = NULL,
+                rotated_at = NULL,
                 scopes = ARRAY['admin','read','write'],
                 updated_at = NOW()
             """),
@@ -112,17 +115,18 @@ def main() -> None:
         conn.execute(
             text("""
             INSERT INTO gateway_configs (
-                id, tenant_id, name, provider, endpoint, model_whitelist, redaction_strategy, is_active
+                id, tenant_id, name, provider, endpoint, model_whitelist, redaction_strategy, redaction_token_retention_days, is_active
             )
             VALUES (
                 :id, :tenant_id, 'Demo Gemini Route', 'gemini',
                 'https://generativelanguage.googleapis.com',
-                ARRAY['gemini-2.5-flash-lite'], 'mask', true
+                ARRAY['gemini-2.5-flash-lite'], 'mask', 90, true
             )
             ON CONFLICT (id) DO UPDATE SET
                 endpoint = EXCLUDED.endpoint,
                 model_whitelist = EXCLUDED.model_whitelist,
                 redaction_strategy = EXCLUDED.redaction_strategy,
+                redaction_token_retention_days = EXCLUDED.redaction_token_retention_days,
                 is_active = true,
                 updated_at = NOW()
             """),

@@ -57,12 +57,17 @@ def insert_audit_event(
     row: dict[str, Any],
     max_retries: int = 3,
     retry_delay: float = 0.5,
-) -> None:
+) -> bool:
     """
     Insert a single audit event row into authclaw.audit_events.
 
     Retries up to max_retries times on transient errors.
+    Returns False when the event already exists and no insert is needed.
     """
+    if audit_event_exists(client, str(row.get("record_id", ""))):
+        logger.info("Skipping duplicate audit event record_id=%s", row.get("record_id"))
+        return False
+
     data = [[row.get(col) for col in _COLUMNS]]
 
     for attempt in range(1, max_retries + 1):
@@ -77,7 +82,7 @@ def insert_audit_event(
                 row.get("record_id"),
                 row.get("tenant_id"),
             )
-            return
+            return True
         except Exception as exc:  # noqa: BLE001
             if attempt == max_retries:
                 logger.error(
@@ -91,6 +96,23 @@ def insert_audit_event(
                 retry_delay,
             )
             time.sleep(retry_delay)
+    return False
+
+
+def audit_event_exists(client: clickhouse_connect.driver.Client, record_id: str) -> bool:
+    """Return True when ClickHouse already has this audit record_id."""
+    if not record_id:
+        return False
+    result = client.query(
+        """
+        SELECT count()
+        FROM authclaw.audit_events
+        WHERE record_id = {record_id:UUID}
+        """,
+        parameters={"record_id": record_id},
+    )
+    rows = result.result_rows
+    return bool(rows and rows[0][0] > 0)
 
 
 def get_prior_hash(

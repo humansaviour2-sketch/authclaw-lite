@@ -1,8 +1,8 @@
 """Pydantic schemas for request/response validation"""
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from uuid import UUID
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class TenantCreate(BaseModel):
@@ -72,6 +72,34 @@ class APIKeyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     scopes: List[str] = Field(default=["read"], min_items=1)
+    expires_in_days: int = Field(default=90, ge=1, le=365)
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, value: List[str]) -> List[str]:
+        allowed = {"read", "write", "admin"}
+        normalized = sorted({scope.strip().lower() for scope in value if scope and scope.strip()})
+        invalid = sorted(set(normalized) - allowed)
+        if invalid:
+            raise ValueError(f"Unsupported API key scopes: {', '.join(invalid)}")
+        if not normalized:
+            raise ValueError("At least one API key scope is required")
+        return normalized
+
+
+class APIKeyRotate(BaseModel):
+    """Schema for rotating an API key into a new secret."""
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    scopes: Optional[List[str]] = None
+    expires_in_days: int = Field(default=90, ge=1, le=365)
+
+    @field_validator("scopes")
+    @classmethod
+    def validate_scopes(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        if value is None:
+            return value
+        return APIKeyCreate.validate_scopes(value)
 
 
 class APIKeyResponse(BaseModel):
@@ -82,6 +110,12 @@ class APIKeyResponse(BaseModel):
     is_active: bool
     created_at: datetime
     last_used: Optional[datetime] = None
+    last_used_ip: Optional[str] = None
+    last_used_request_id: Optional[str] = None
+    expires_at: datetime
+    revoked_at: Optional[datetime] = None
+    rotated_at: Optional[datetime] = None
+    rotated_from_id: Optional[UUID] = None
 
     class Config:
         from_attributes = True
@@ -92,6 +126,7 @@ class PolicyCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     policy_yaml: str = Field(..., min_length=10)
+    activate: bool = True
 
 
 class PolicyResponse(BaseModel):
@@ -128,6 +163,7 @@ class GatewayConfigCreate(BaseModel):
     endpoint: str = Field(..., min_length=1, max_length=512)
     model_whitelist: Optional[List[str]] = None
     redaction_strategy: str = Field(default="mask", pattern="^(mask|hash|synthetic)$")
+    redaction_token_retention_days: int = Field(default=90, ge=1, le=3650)
 
 
 class GatewayConfigResponse(BaseModel):
@@ -137,11 +173,54 @@ class GatewayConfigResponse(BaseModel):
     provider: str
     endpoint: str
     redaction_strategy: str
+    redaction_token_retention_days: int = 90
     is_active: bool
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class PolicyValidationRequest(BaseModel):
+    """Validate policy YAML before activation."""
+    policy_yaml: str = Field(..., min_length=1)
+
+
+class PolicyValidationResponse(BaseModel):
+    valid: bool
+    errors: List[Dict[str, str]] = []
+    warnings: List[Dict[str, str]] = []
+    normalized_policy: Optional[Dict[str, Any]] = None
+    stats: Optional[Dict[str, Any]] = None
+
+
+class PolicySimulationRequest(BaseModel):
+    """Dry-run a policy decision without changing active policy state."""
+    policy_yaml: Optional[str] = None
+    policy_id: Optional[UUID] = None
+    model: str = Field(..., min_length=1, max_length=255)
+    route: str = Field(default="/v1/chat/completions", max_length=512)
+    prompts: List[str] = Field(default_factory=list)
+    topics: List[str] = Field(default_factory=list)
+    rate_limit_exceeded: bool = False
+
+
+class PolicySimulationResponse(BaseModel):
+    decision: str
+    allow: bool
+    reason: str
+    policy_id: Optional[UUID] = None
+    policy_version: Optional[int] = None
+    policy_name: Optional[str] = None
+    explanations: List[Dict[str, Any]]
+    matched_rules: List[Dict[str, Any]]
+    validation: PolicyValidationResponse
+
+
+class PolicyRollbackRequest(BaseModel):
+    """Activate an older policy version."""
+    policy_id: Optional[UUID] = None
+    version: Optional[int] = Field(default=None, ge=1)
 
 
 class ProviderCredentialCreate(BaseModel):
@@ -160,9 +239,12 @@ class ProviderCredentialResponse(BaseModel):
     endpoint: Optional[str] = None
     auth_scheme: str
     status: str
+    version: int = 1
     last_verified_at: Optional[datetime] = None
     created_at: datetime
     rotated_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+    rotated_from_id: Optional[UUID] = None
 
     class Config:
         from_attributes = True
@@ -241,6 +323,11 @@ class RedactionTokenMapResponse(BaseModel):
     token_hash: str
     original_value: str
     strategy: str
+    entity_type: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    last_used_at: Optional[datetime] = None
+    use_count: int = 0
+    purged_at: Optional[datetime] = None
     created_at: datetime
 
     class Config:

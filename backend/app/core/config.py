@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # Encryption
     ENVELOPE_KEY: str = "your-256-bit-hex-encoded-key-here"
     KMS_KEY_ID: str = "local-dev-key-id"
+    AUTHCLAW_SECRET_PROVIDER: str = "env"
+    AUTHCLAW_SECRET_KEY_VERSION: str = "v1"
+    VAULT_ADDR: str = ""
+    VAULT_SECRET_KEY_PATH: str = ""
+    VAULT_SECRET_KEY_FIELD: str = "key"
+    AWS_KMS_ENCRYPTED_DATA_KEY: str = ""
     
     class Config:
         env_file = ("../.env.local", ".env.local")

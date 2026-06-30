@@ -35,6 +35,7 @@ class WorkflowState(str, Enum):
     AWAITING_APPROVAL = "AWAITING_APPROVAL"
     EXECUTE_REMEDIATION = "EXECUTE_REMEDIATION"
     VERIFY_RESULTS = "VERIFY_RESULTS"
+    ROLLBACK_REMEDIATION = "ROLLBACK_REMEDIATION"
     COMPLETE = "COMPLETE"
     FAILED = "FAILED"
 
@@ -44,6 +45,28 @@ class ExecutionStatus(str, Enum):
     PAUSED = "PAUSED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+
+
+class RemediationState(str, Enum):
+    NOT_STARTED = "NOT_STARTED"
+    EXECUTING = "EXECUTING"
+    VERIFYING = "VERIFYING"
+    RETRYING = "RETRYING"
+    SUCCEEDED = "SUCCEEDED"
+    PARTIAL_FAILED = "PARTIAL_FAILED"
+    ROLLING_BACK = "ROLLING_BACK"
+    ROLLED_BACK = "ROLLED_BACK"
+    ROLLBACK_FAILED = "ROLLBACK_FAILED"
+    FAILED = "FAILED"
+
+
+class RemediationActionStatus(str, Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    ROLLED_BACK = "ROLLED_BACK"
+    ROLLBACK_FAILED = "ROLLBACK_FAILED"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -61,6 +84,9 @@ class ComplianceState(TypedDict, total=False):
     findings: list[dict]
     risk_score: float
     remediation_plan: list[dict]
+    remediation_state: str
+    remediation_actions: list[dict]
+    rollback_result: dict
     approval_status: str
     approval_id: str
     execution_status: str
@@ -387,6 +413,145 @@ def awaiting_approval(state: ComplianceState) -> ComplianceState:
     return new_state
 
 
+def _now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _remediation_action_id(index: int, action: dict) -> str:
+    identity = "|".join([
+        str(index),
+        action.get("finding_control", ""),
+        action.get("action", ""),
+    ])
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
+
+
+def _build_remediation_actions(plan: list[dict], previous_actions: list[dict] | None) -> list[dict]:
+    previous_by_id = {
+        item.get("id"): item
+        for item in (previous_actions or [])
+        if item.get("id")
+    }
+
+    actions = []
+    for index, plan_item in enumerate(plan):
+        action_id = _remediation_action_id(index, plan_item)
+        existing = previous_by_id.get(action_id, {})
+        actions.append({
+            "id": action_id,
+            "index": index,
+            "finding_control": plan_item.get("finding_control", ""),
+            "action": plan_item.get("action", "Unknown action"),
+            "priority": plan_item.get("priority", "medium"),
+            "status": existing.get("status", RemediationActionStatus.PENDING.value),
+            "attempts": existing.get("attempts", 0),
+            "last_error": existing.get("last_error", ""),
+            "started_at": existing.get("started_at", ""),
+            "updated_at": existing.get("updated_at", ""),
+            "completed_at": existing.get("completed_at", ""),
+            "result": existing.get("result"),
+            "rollback_plan": existing.get("rollback_plan"),
+            "rollback_result": existing.get("rollback_result"),
+        })
+
+    return actions
+
+
+def _summarize_remediation_actions(actions: list[dict], remediation_state: str) -> dict:
+    successful = [
+        action for action in actions
+        if action.get("status") in (
+            RemediationActionStatus.SUCCEEDED.value,
+            RemediationActionStatus.ROLLED_BACK.value,
+        )
+    ]
+    failed = [
+        action for action in actions
+        if action.get("status") in (
+            RemediationActionStatus.FAILED.value,
+            RemediationActionStatus.ROLLBACK_FAILED.value,
+        )
+    ]
+    return {
+        "remediation_state": remediation_state,
+        "actions_executed": len(actions),
+        "actions_successful": len(successful),
+        "actions_failed": len(failed),
+        "rollback_required": any(
+            action.get("status") == RemediationActionStatus.SUCCEEDED.value
+            for action in actions
+        ) and bool(failed),
+        "details": [
+            action.get("result") or {
+                "connector": "S3Document",
+                "control": action.get("finding_control", ""),
+                "status": action.get("status", ""),
+                "details": action.get("last_error", ""),
+            }
+            for action in actions
+        ],
+        "actions": actions,
+    }
+
+
+def _get_remediation_actions(state: ComplianceState) -> list[dict]:
+    if state.get("remediation_actions"):
+        return state.get("remediation_actions", [])
+    result = state.get("execution_result") or {}
+    return result.get("actions", [])
+
+
+def _trace_value(value: Any, limit: int = 180) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[:limit - 3] + "..."
+
+
+def _emit_remediation_action_audit(
+    state: ComplianceState,
+    action: dict,
+    transition: str,
+    audit_action: str,
+    status: str,
+    extra_trace: list[str] | None = None,
+) -> None:
+    emit = state.get("_emit_audit")
+    if not emit:
+        return
+
+    trace = [
+        f"action_id={action.get('id', '')}",
+        f"action_index={action.get('index', '')}",
+        f"control={_trace_value(action.get('finding_control', ''))}",
+        f"attempt={action.get('attempts', 0)}",
+        f"action_status={action.get('status', '')}",
+    ]
+    if extra_trace:
+        trace.extend(extra_trace)
+
+    try:
+        emit(
+            state["workflow_id"],
+            state["tenant_id"],
+            state.get("request_id", ""),
+            transition,
+            audit_action,
+            status,
+            trace,
+        )
+    except TypeError:
+        # Unit tests and older integrations may still provide the original 6-arg callback.
+        emit(
+            state["workflow_id"],
+            state["tenant_id"],
+            state.get("request_id", ""),
+            transition,
+            audit_action,
+            status,
+        )
+
+
 def execute_remediation(state: ComplianceState) -> ComplianceState:
     """EXECUTE_REMEDIATION: Apply the approved remediation plan in REPORT ONLY mode."""
     logger.info("[%s] Executing remediation", state["workflow_id"])
@@ -400,40 +565,96 @@ def execute_remediation(state: ComplianceState) -> ComplianceState:
         logger.error("Failed to initialize DocumentScanner: %s", e)
         scanner = None
     
-    details = []
-    actions_successful = 0
-    actions_failed = 0
+    actions = _build_remediation_actions(plan, _get_remediation_actions(state))
     
-    for action in plan:
+    for action in actions:
+        if action.get("status") in (
+            RemediationActionStatus.SUCCEEDED.value,
+            RemediationActionStatus.ROLLED_BACK.value,
+        ):
+            continue
+
         control = action.get("finding_control", "")
-        if scanner:
-            try:
-                res = scanner.simulate_remediation(control, action.get("action", "Unknown action"))
-                details.append(res)
-                actions_successful += 1
-            except Exception as e:
-                details.append({
+        remediation_text = action.get("action", "Unknown action")
+        now = _now_iso()
+        action.update({
+            "status": RemediationActionStatus.RUNNING.value,
+            "attempts": action.get("attempts", 0) + 1,
+            "started_at": action.get("started_at") or now,
+            "updated_at": now,
+            "last_error": "",
+        })
+        _emit_remediation_action_audit(
+            state,
+            action,
+            "REMEDIATION_ACTION_STARTED",
+            "remediation_action_started",
+            "running",
+        )
+
+        try:
+            if not scanner:
+                raise RuntimeError("Scanner not initialized")
+
+            res = scanner.simulate_remediation(control, remediation_text)
+            status = str(res.get("status", "")).lower()
+            if status not in ("success", "succeeded", "completed"):
+                raise RuntimeError(res.get("details") or f"Remediation returned status {status}")
+
+            action.update({
+                "status": RemediationActionStatus.SUCCEEDED.value,
+                "result": res,
+                "rollback_plan": {
+                    "mode": "report_only",
+                    "control": control,
+                    "action": "Mark simulated remediation as reverted",
+                    "reason": "No external S3 mutation was performed by the remediation engine",
+                },
+                "completed_at": _now_iso(),
+                "updated_at": _now_iso(),
+            })
+            _emit_remediation_action_audit(
+                state,
+                action,
+                "REMEDIATION_ACTION_SUCCEEDED",
+                "remediation_action_succeeded",
+                "succeeded",
+                [
+                    f"connector={res.get('connector', 'S3Document')}",
+                    f"result_status={res.get('status', '')}",
+                ],
+            )
+        except Exception as e:
+            action.update({
+                "status": RemediationActionStatus.FAILED.value,
+                "last_error": str(e),
+                "result": {
                     "connector": "S3Document",
                     "control": control,
                     "status": "failed",
-                    "details": str(e)
-                })
-                actions_failed += 1
-        else:
-            details.append({
-                "connector": "S3Document",
-                "control": control,
-                "status": "failed",
-                "details": "Scanner not initialized"
+                    "details": str(e),
+                },
+                "updated_at": _now_iso(),
             })
-            actions_failed += 1
+            _emit_remediation_action_audit(
+                state,
+                action,
+                "REMEDIATION_ACTION_FAILED",
+                "remediation_action_failed",
+                "failed",
+                [f"error={_trace_value(e)}"],
+            )
             
-    result = {
-        "actions_executed": len(plan),
-        "actions_successful": actions_successful,
-        "actions_failed": actions_failed,
-        "details": details,
-    }
+    failed_count = len([
+        action for action in actions
+        if action.get("status") == RemediationActionStatus.FAILED.value
+    ])
+    remediation_state = (
+        RemediationState.SUCCEEDED.value
+        if failed_count == 0
+        else RemediationState.PARTIAL_FAILED.value
+    )
+    result = _summarize_remediation_actions(actions, remediation_state)
     
     emit = state.get("_emit_audit")
     if emit:
@@ -443,9 +664,11 @@ def execute_remediation(state: ComplianceState) -> ComplianceState:
     persist = state.get("_persist_state")
     new_state = {
         **state,
+        "remediation_state": remediation_state,
+        "remediation_actions": actions,
         "execution_result": result,
         "current_state": WorkflowState.VERIFY_RESULTS.value,
-        "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "updated_at": _now_iso(),
     }
     if persist:
         persist(new_state)
@@ -471,13 +694,36 @@ def verify_results(state: ComplianceState) -> ComplianceState:
             new_state = {
                 **state,
                 "current_state": WorkflowState.EXECUTE_REMEDIATION.value,
+                "remediation_state": RemediationState.RETRYING.value,
                 "retry_count": retry_count + 1,
-                "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+                "updated_at": _now_iso(),
             }
             if persist:
                 persist(new_state)
             return new_state
         # Max retries exceeded
+        actions = _get_remediation_actions(state)
+        has_rollback_candidates = any(
+            action.get("status") == RemediationActionStatus.SUCCEEDED.value
+            for action in actions
+        )
+        if has_rollback_candidates:
+            emit = state.get("_emit_audit")
+            if emit:
+                emit(state["workflow_id"], state["tenant_id"], state.get("request_id", ""),
+                     "VERIFY_RESULTS->ROLLBACK_REMEDIATION", "verify_results", "rollback_required")
+            persist = state.get("_persist_state")
+            new_state = {
+                **state,
+                "current_state": WorkflowState.ROLLBACK_REMEDIATION.value,
+                "remediation_state": RemediationState.ROLLING_BACK.value,
+                "error_message": "Max retries exceeded during verification; rollback required",
+                "updated_at": _now_iso(),
+            }
+            if persist:
+                persist(new_state)
+            return new_state
+
         emit = state.get("_emit_audit")
         if emit:
             emit(state["workflow_id"], state["tenant_id"], state.get("request_id", ""),
@@ -487,8 +733,9 @@ def verify_results(state: ComplianceState) -> ComplianceState:
             **state,
             "current_state": WorkflowState.FAILED.value,
             "execution_status": ExecutionStatus.FAILED.value,
+            "remediation_state": RemediationState.FAILED.value,
             "error_message": "Max retries exceeded during verification",
-            "updated_at": datetime.now(tz=timezone.utc).isoformat(),
+            "updated_at": _now_iso(),
         }
         if persist:
             persist(new_state)
@@ -500,11 +747,12 @@ def verify_results(state: ComplianceState) -> ComplianceState:
              "VERIFY_RESULTS→COMPLETE", "verify_results", "passed")
     
     persist = state.get("_persist_state")
-    now = datetime.now(tz=timezone.utc).isoformat()
+    now = _now_iso()
     new_state = {
         **state,
         "current_state": WorkflowState.COMPLETE.value,
         "execution_status": ExecutionStatus.COMPLETED.value,
+        "remediation_state": RemediationState.SUCCEEDED.value,
         "updated_at": now,
         "completed_at": now,
     }
@@ -516,6 +764,129 @@ def verify_results(state: ComplianceState) -> ComplianceState:
 # ──────────────────────────────────────────────────────────────────────────────
 # Routing logic
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+def rollback_remediation(state: ComplianceState) -> ComplianceState:
+    """ROLLBACK_REMEDIATION: Revert successful remediation actions after terminal failure."""
+    logger.info("[%s] Rolling back remediation", state["workflow_id"])
+
+    actions = _get_remediation_actions(state)
+    rollback_details = []
+    rollback_succeeded = 0
+    rollback_failed = 0
+
+    # Roll back in reverse execution order.
+    for action in sorted(actions, key=lambda item: item.get("index", 0), reverse=True):
+        if action.get("status") == RemediationActionStatus.ROLLED_BACK.value:
+            rollback_succeeded += 1
+            rollback_details.append(action.get("rollback_result") or {})
+            continue
+
+        if action.get("status") != RemediationActionStatus.SUCCEEDED.value:
+            continue
+
+        _emit_remediation_action_audit(
+            state,
+            action,
+            "REMEDIATION_ACTION_ROLLBACK_STARTED",
+            "remediation_action_rollback_started",
+            "running",
+            ["rollback_mode=report_only"],
+        )
+
+        try:
+            rollback_result = {
+                "connector": "S3Document",
+                "control": action.get("finding_control", ""),
+                "status": "rolled_back",
+                "mode": "report_only",
+                "details": (
+                    "Recorded rollback for simulated remediation; no external S3 mutation "
+                    "was performed by the remediation engine."
+                ),
+            }
+            action.update({
+                "status": RemediationActionStatus.ROLLED_BACK.value,
+                "rollback_result": rollback_result,
+                "updated_at": _now_iso(),
+            })
+            rollback_details.append(rollback_result)
+            rollback_succeeded += 1
+            _emit_remediation_action_audit(
+                state,
+                action,
+                "REMEDIATION_ACTION_ROLLED_BACK",
+                "remediation_action_rolled_back",
+                "rolled_back",
+                [
+                    "rollback_mode=report_only",
+                    f"rollback_status={rollback_result.get('status', '')}",
+                ],
+            )
+        except Exception as exc:
+            rollback_result = {
+                "connector": "S3Document",
+                "control": action.get("finding_control", ""),
+                "status": "rollback_failed",
+                "details": str(exc),
+            }
+            action.update({
+                "status": RemediationActionStatus.ROLLBACK_FAILED.value,
+                "rollback_result": rollback_result,
+                "last_error": str(exc),
+                "updated_at": _now_iso(),
+            })
+            rollback_details.append(rollback_result)
+            rollback_failed += 1
+            _emit_remediation_action_audit(
+                state,
+                action,
+                "REMEDIATION_ACTION_ROLLBACK_FAILED",
+                "remediation_action_rollback_failed",
+                "failed",
+                [f"error={_trace_value(exc)}"],
+            )
+
+    rollback_result = {
+        "rollback_attempted": rollback_succeeded + rollback_failed,
+        "rollback_successful": rollback_succeeded,
+        "rollback_failed": rollback_failed,
+        "details": rollback_details,
+    }
+    remediation_state = (
+        RemediationState.ROLLED_BACK.value
+        if rollback_failed == 0
+        else RemediationState.ROLLBACK_FAILED.value
+    )
+    execution_result = _summarize_remediation_actions(actions, remediation_state)
+
+    emit = state.get("_emit_audit")
+    if emit:
+        emit(state["workflow_id"], state["tenant_id"], state.get("request_id", ""),
+             "ROLLBACK_REMEDIATION->FAILED", "rollback_remediation",
+             "completed" if rollback_failed == 0 else "failed")
+
+    persist = state.get("_persist_state")
+    now = _now_iso()
+    new_state = {
+        **state,
+        "current_state": WorkflowState.FAILED.value,
+        "execution_status": ExecutionStatus.FAILED.value,
+        "remediation_state": remediation_state,
+        "remediation_actions": actions,
+        "execution_result": execution_result,
+        "rollback_result": rollback_result,
+        "error_message": (
+            "Remediation failed after retries; rollback completed"
+            if rollback_failed == 0
+            else "Remediation failed after retries; rollback failed"
+        ),
+        "updated_at": now,
+        "completed_at": now,
+    }
+    if persist:
+        persist(new_state)
+    return new_state
 
 
 def route_after_plan(state: ComplianceState) -> str:
@@ -541,6 +912,8 @@ def route_after_verify(state: ComplianceState) -> str:
     cs = state.get("current_state", "")
     if cs == WorkflowState.EXECUTE_REMEDIATION.value:
         return "execute_remediation"  # retry
+    if cs == WorkflowState.ROLLBACK_REMEDIATION.value:
+        return "rollback_remediation"
     if cs == WorkflowState.FAILED.value:
         return END
     return END  # COMPLETE
@@ -562,6 +935,7 @@ def build_compliance_graph() -> StateGraph:
     graph.add_node("awaiting_approval", awaiting_approval)
     graph.add_node("execute_remediation", execute_remediation)
     graph.add_node("verify_results", verify_results)
+    graph.add_node("rollback_remediation", rollback_remediation)
 
     # Set entry point
     graph.set_entry_point("gather_evidence")
@@ -575,6 +949,11 @@ def build_compliance_graph() -> StateGraph:
                                 {"execute_remediation": "execute_remediation", END: END})
     graph.add_edge("execute_remediation", "verify_results")
     graph.add_conditional_edges("verify_results", route_after_verify,
-                                {"execute_remediation": "execute_remediation", END: END})
+                                {
+                                    "execute_remediation": "execute_remediation",
+                                    "rollback_remediation": "rollback_remediation",
+                                    END: END,
+                                })
+    graph.add_edge("rollback_remediation", END)
 
     return graph.compile()

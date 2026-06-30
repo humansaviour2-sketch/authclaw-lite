@@ -136,7 +136,7 @@ export async function POST(request: Request) {
       text: responseText,
     });
 
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json({ error: (error instanceof Error ? error.message : "Request failed") }, { status: 500 });
   }
 }

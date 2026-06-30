@@ -120,14 +120,30 @@ func ValidatePolicyYAML(yamlStr string) (*PolicyConfig, error) {
 		return nil, fmt.Errorf("invalid YAML syntax: %w", err)
 	}
 
-	for _, rule := range config.RegexRules {
+	for idx, rule := range config.RegexRules {
+		if strings.TrimSpace(rule.Pattern) == "" {
+			return nil, fmt.Errorf("regex rule %d missing pattern", idx)
+		}
 		if _, err := regexp.Compile(rule.Pattern); err != nil {
 			return nil, fmt.Errorf("invalid regex pattern '%s': %w", rule.Pattern, err)
 		}
-		switch strings.ToLower(strings.TrimSpace(rule.Action)) {
+		action := strings.ToLower(strings.TrimSpace(rule.Action))
+		switch action {
 		case "", "redact", "require_approval", "block":
 		default:
 			return nil, fmt.Errorf("invalid regex rule action '%s' for rule '%s'", rule.Action, rule.Name)
+		}
+		if action == "require_approval" && (rule.HITLTimeoutSeconds < 0 || rule.HITLTimeoutSeconds > 1800 || (rule.HITLTimeoutSeconds > 0 && rule.HITLTimeoutSeconds < 10)) {
+			return nil, fmt.Errorf("regex rule '%s' hitl_timeout_seconds must be between 10 and 1800 seconds", rule.Name)
+		}
+	}
+
+	for idx, rule := range config.TopicRules {
+		if strings.TrimSpace(rule.Topic) == "" {
+			return nil, fmt.Errorf("topic rule %d missing topic", idx)
+		}
+		if len(rule.AllowedModels) == 0 {
+			return nil, fmt.Errorf("topic rule '%s' must include at least one allowed model", rule.Topic)
 		}
 	}
 
@@ -182,6 +198,21 @@ func FindApprovalRuleMatch(config *PolicyConfig, prompts []string) (*ApprovalRul
 
 func FindBlockingRuleMatch(config *PolicyConfig, prompts []string) (*ApprovalRuleMatch, error) {
 	return FindRegexRuleMatchByAction(config, prompts, "block")
+}
+
+func PolicyRuleDecisionReason(match *ApprovalRuleMatch, action string) string {
+	if match == nil {
+		return fmt.Sprintf("Policy rule action %s matched", action)
+	}
+	ruleName := strings.TrimSpace(match.Rule.Name)
+	if ruleName == "" {
+		ruleName = "unnamed_rule"
+	}
+	reason := strings.TrimSpace(match.Rule.Reason)
+	if reason == "" {
+		reason = fmt.Sprintf("Rule %s matched", ruleName)
+	}
+	return fmt.Sprintf("Policy rule %q action=%s matched: %s", ruleName, action, reason)
 }
 
 // LoadPolicyWithCache handles loading from cache, fallback to Postgres under RLS
@@ -348,6 +379,14 @@ func EvaluatePolicy(ctx context.Context, tenantID, model, route string, prompts 
 	if err := json.NewDecoder(resp.Body).Decode(&opaResp); err != nil {
 		log.Printf("[POLICY-ERROR] Decode OPA response failed: %v", err)
 		return false, defaultDenyReason, policyID, err
+	}
+
+	if opaResp.Result.Reason == "" {
+		if opaResp.Result.Allow {
+			opaResp.Result.Reason = "Allowed by OPA policy"
+		} else {
+			opaResp.Result.Reason = defaultDenyReason
+		}
 	}
 
 	return opaResp.Result.Allow, opaResp.Result.Reason, policyID, nil

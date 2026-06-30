@@ -16,6 +16,29 @@ export async function GET() {
       process.env.GATEWAY_INTERNAL_URL ||
       process.env.NEXT_PUBLIC_GATEWAY_URL ||
       "http://localhost:8080";
+    const backendUrl = process.env.API_URL || "http://localhost:8000";
+
+    try {
+      const backendRes = await fetch(`${backendUrl}/health`, { cache: "no-store" });
+      const backendHealth = backendRes.ok ? await backendRes.json() : null;
+      const secretStatus = backendHealth?.secret_management;
+      items.push({
+        key: "secret_management",
+        label: "Secret management configured",
+        ok: Boolean(secretStatus?.configured),
+        detail: secretStatus
+          ? `${secretStatus.provider} provider, key ${secretStatus.key_version}: ${secretStatus.detail}`
+          : `Backend returned ${backendRes.status}`,
+      });
+    } catch {
+      items.push({
+        key: "secret_management",
+        label: "Secret management configured",
+        ok: false,
+        detail: `Could not reach ${backendUrl}/health`,
+      });
+    }
+
     try {
       const gatewayRes = await fetch(`${gatewayUrl}/health`, { cache: "no-store" });
       items.push({

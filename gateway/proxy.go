@@ -61,46 +61,16 @@ func NewProxyServer() *ProxyServer {
 
 // RouteRequest determines the target provider base URL based on the request
 func (p *ProxyServer) RouteRequest(r *http.Request) string {
-	provider := r.Header.Get("X-Provider")
-	if provider != "" {
-		switch strings.ToLower(provider) {
-		case "openai":
-			return p.OpenAIBaseURL
-		case "anthropic":
-			return p.AnthropicBaseURL
-		case "cohere":
-			return p.CohereBaseURL
-		case "azure":
-			return p.AzureOpenAIBaseURL
-		case "gemini":
-			return p.GeminiBaseURL
-		// Phase 14: Bedrock provider via explicit header
-		case "bedrock":
-			if p.BedrockBaseURL != "" {
-				return p.BedrockBaseURL
-			}
-		}
+	provider := ProviderForRequest(r)
+	if baseURL := providerBaseURL(p, provider); baseURL != "" {
+		return baseURL
 	}
 
-	path := r.URL.Path
 	// Phase 14: Bedrock path prefix routing (e.g. /bedrock/model/anthropic.claude.../invoke)
-	if strings.HasPrefix(path, "/bedrock/") && p.BedrockBaseURL != "" {
+	if provider == ProviderBedrock && p.BedrockBaseURL != "" {
 		return p.BedrockBaseURL
 	}
-	if strings.Contains(path, ":generateContent") {
-		return p.GeminiBaseURL
-	}
-	if strings.HasPrefix(path, "/v1/chat/completions") || strings.HasPrefix(path, "/v1/models") {
-		return p.OpenAIBaseURL
-	}
-	if strings.HasPrefix(path, "/v1/messages") || strings.HasPrefix(path, "/v1/complete") {
-		return p.AnthropicBaseURL
-	}
-	if strings.HasPrefix(path, "/v1/generate") || strings.HasPrefix(path, "/v1/embed") {
-		return p.CohereBaseURL
-	}
-
-	return p.OpenAIBaseURL
+	return ""
 }
 
 type responseWriter struct {
@@ -121,9 +91,21 @@ func generateID() string {
 	return hex.EncodeToString(b)
 }
 
+func sameStringSlice(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func requiresTenantProviderCredential(provider string) bool {
-	switch provider {
-	case "openai", "anthropic", "cohere", "gemini":
+	switch NormalizeProvider(provider) {
+	case ProviderOpenAI, ProviderAnthropic, ProviderCohere, ProviderAzureOpenAI, ProviderGemini:
 		return true
 	default:
 		return false
@@ -137,23 +119,8 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requesterID, _ := r.Context().Value(UserIDContextKey).(string)
 
 	// Determine provider
+	provider := ProviderForRequest(r)
 	targetURLStr := p.RouteRequest(r)
-	if targetURLStr == "" {
-		http.Error(w, "Provider endpoint not configured", http.StatusBadGateway)
-		return
-	}
-
-	provider := "openai"
-	if strings.Contains(targetURLStr, "anthropic") {
-		provider = "anthropic"
-	} else if strings.Contains(targetURLStr, "cohere") {
-		provider = "cohere"
-	} else if targetURLStr == p.GeminiBaseURL || strings.Contains(targetURLStr, "googleapis.com") {
-		provider = "gemini"
-	} else if strings.Contains(targetURLStr, "bedrock-runtime") || strings.Contains(targetURLStr, "bedrock.") {
-		// Phase 14: detect Bedrock by endpoint URL
-		provider = "bedrock"
-	}
 
 	providerCredential, credentialErr := LoadProviderCredential(r.Context(), tenantID, provider)
 	if credentialErr != nil {
@@ -175,6 +142,10 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if providerCredential != nil && providerCredential.Endpoint != "" {
 		targetURLStr = providerCredential.Endpoint
 	}
+	if targetURLStr == "" {
+		http.Error(w, "Provider endpoint not configured", http.StatusBadGateway)
+		return
+	}
 
 	// Extract and normalize request details
 	var model string
@@ -187,9 +158,36 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		originalPrompts = make([]string, len(normalized.Prompts))
 		copy(originalPrompts, normalized.Prompts)
 	}
+	if routeErr := ValidateProviderRoute(provider, r, targetURLStr, model); routeErr != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(fmt.Sprintf(`{"error":"ProviderRouteInvalid","message":"%s"}`, routeErr.Error())))
+		EmitAuditEvent(&AuditEvent{
+			ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
+			TenantID: tenantID, Action: "block", DecisionReason: routeErr.Error(),
+			Provider: provider, Model: model, PromptCount: promptCount,
+			RequestSize: int(r.ContentLength), ResponseStatus: http.StatusBadRequest, DurationMs: 0,
+		})
+		return
+	}
 
-	// Load Policy early for Redaction
-	config, policyID, _ := LoadPolicyWithCache(r.Context(), tenantID)
+	// Load policy before any pre-egress rule checks. A malformed or unavailable
+	// tenant policy defaults to deny rather than silently bypassing gateway rules.
+	config, policyID, policyLoadErr := LoadPolicyWithCache(r.Context(), tenantID)
+	if policyLoadErr != nil {
+		log.Printf("[POLICY-ERROR] Early policy load failed: %v", policyLoadErr)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"error":"PolicyEvaluationFailed","message":"Request blocked: policy loading or parsing error"}`))
+		EmitAuditEvent(&AuditEvent{
+			ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
+			TenantID: tenantID, PolicyID: policyID, Action: "block",
+			DecisionReason: "Request blocked: policy loading or parsing error",
+			Provider:       provider, Model: model, PromptCount: promptCount,
+			RequestSize: int(r.ContentLength), ResponseStatus: http.StatusForbidden, DurationMs: 0,
+		})
+		return
+	}
 	var customRules []RegexRule
 	if config != nil {
 		customRules = config.RegexRules
@@ -210,10 +208,7 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if blockMatch != nil {
-			reason := blockMatch.Rule.Reason
-			if reason == "" {
-				reason = fmt.Sprintf("Custom policy rule '%s' blocked request", blockMatch.Rule.Name)
-			}
+			reason := PolicyRuleDecisionReason(blockMatch, "block")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte(fmt.Sprintf(`{"error":"PolicyBlocked","message":"%s"}`, reason)))
@@ -293,22 +288,27 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			EmitAuditEvent(&AuditEvent{
 				ID: generateID(), RequestID: requestID, Timestamp: time.Now(),
 				TenantID: tenantID, PolicyID: policyID, Action: "approval_allow",
-				DecisionReason: fmt.Sprintf("HITL approved: %s", approvalMatch.Rule.Reason),
+				DecisionReason: "HITL approved: " + PolicyRuleDecisionReason(approvalMatch, "require_approval"),
 				Provider:       provider, Model: model, PromptCount: promptCount,
 				RequestSize: int(r.ContentLength), ResponseStatus: http.StatusOK, DurationMs: 0,
 			})
-			finalAllowReason = fmt.Sprintf("HITL approved: %s", approvalMatch.Rule.Reason)
+			finalAllowReason = "HITL approved: " + PolicyRuleDecisionReason(approvalMatch, "require_approval")
 		}
 	}
 
 	// Inbound Prompt Redaction
 	var tokenMap map[string]string
-	if provider == "openai" || provider == "anthropic" || provider == "gemini" || provider == "bedrock" {
+	if tenantID != "" && (provider == ProviderOpenAI || provider == ProviderAnthropic || provider == ProviderCohere || provider == ProviderAzureOpenAI || provider == ProviderGemini || provider == ProviderBedrock) {
 		if normalized != nil && len(normalized.Prompts) > 0 {
 			var redactErr error
 			var redactedPrompts []string
+			redactStart := time.Now()
 			redactedPrompts, tokenMap, redactErr = RedactPrompts(r.Context(), tenantID, normalized.Prompts, customRules)
+			redactDurationMs := time.Since(redactStart).Milliseconds()
 			if redactErr == nil {
+				if time.Duration(redactDurationMs)*time.Millisecond >= presidioSlowLogThreshold() {
+					log.Printf("[REDACTION] status=slow_complete duration_ms=%d request_id=%s provider=%s prompt_count=%d token_count=%d", redactDurationMs, requestID, provider, len(normalized.Prompts), len(tokenMap))
+				}
 				log.Printf("[DEBUG] ORIGINAL PROMPT: %v", normalized.Prompts)
 				log.Printf("[DEBUG] REDACTED PROMPT: %v", redactedPrompts)
 				if len(tokenMap) > 0 {
@@ -333,16 +333,18 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						DurationMs:     0,
 					})
 				}
-				newBody, rebuildErr := rebuilder(redactedPrompts)
-				if rebuildErr == nil {
-					r.Body = io.NopCloser(bytes.NewBuffer(newBody))
-					r.ContentLength = int64(len(newBody))
-					r.Header.Set("Content-Length", fmt.Sprintf("%d", len(newBody)))
-				} else {
-					log.Printf("Rebuilding body failed: %v", rebuildErr)
+				if !sameStringSlice(normalized.Prompts, redactedPrompts) {
+					newBody, rebuildErr := rebuilder(redactedPrompts)
+					if rebuildErr == nil {
+						r.Body = io.NopCloser(bytes.NewBuffer(newBody))
+						r.ContentLength = int64(len(newBody))
+						r.Header.Set("Content-Length", fmt.Sprintf("%d", len(newBody)))
+					} else {
+						log.Printf("Rebuilding body failed: %v", rebuildErr)
+					}
 				}
 			} else {
-				log.Printf("Redaction failed: %v", redactErr)
+				log.Printf("[REDACTION] status=error duration_ms=%d request_id=%s provider=%s prompt_count=%d err=%v", redactDurationMs, requestID, provider, len(normalized.Prompts), redactErr)
 			}
 		}
 	}
@@ -391,7 +393,7 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Phase 14: Bedrock hard usage limit enforcement
 	// Runs AFTER OPA (which can also block on model whitelist).
 	// Checked here to prevent any AWS request when daily cap is exceeded.
-	if provider == "bedrock" {
+	if provider == ProviderBedrock {
 		if limitErr := CheckBedrockUsageLimits(r.Context(), tenantID); limitErr != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusTooManyRequests)
@@ -415,6 +417,12 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Create reverse proxy
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, proxyErr error) {
+		log.Printf("[PROXY] status=bad_gateway request_id=%s provider=%s target=%s err=%v", requestID, provider, target.String(), proxyErr)
+		rw.Header().Set("Content-Type", "application/json")
+		rw.WriteHeader(http.StatusBadGateway)
+		rw.Write([]byte(fmt.Sprintf(`{"error":"ProviderProxyError","message":"upstream request failed","provider":"%s"}`, provider)))
+	}
 
 	// Customize director to rewrite target host and request URL
 	originalDirector := proxy.Director
@@ -423,6 +431,11 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		req.Host = target.Host
 		req.URL.Scheme = target.Scheme
 		req.URL.Host = target.Host
+		if provider == ProviderAzureOpenAI && isAzureDeploymentChatPath(target.Path) && !isAzureDeploymentChatPath(r.URL.Path) {
+			req.URL.Path = target.Path
+			req.URL.RawPath = ""
+		}
+		ApplyProviderCredential(req, provider, providerCredential, tenantID, target)
 		if provider == "gemini" {
 			// Existing Gemini auth — UNCHANGED
 			req.Header.Del("Authorization")
@@ -475,24 +488,34 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
-		if len(tokenMap) == 0 {
+		if len(tokenMap) == 0 && tenantID == "" {
 			return nil
 		}
 
 		contentType := resp.Header.Get("Content-Type")
 		if strings.Contains(contentType, "text/event-stream") {
-			resp.Body = NewStreamingReversalReader(resp.Body, tokenMap, provider)
+			resp.Body = NewStreamingProtectionReader(r.Context(), resp.Body, tokenMap, provider, tenantID, customRules, GetRedactionRuntimeConfig(r.Context(), tenantID))
 		} else {
-			bodyBytes, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return err
+			body, readErr := io.ReadAll(resp.Body)
+			if closeErr := resp.Body.Close(); closeErr != nil && readErr == nil {
+				readErr = closeErr
 			}
-			resp.Body.Close()
-
-			reversedBytes := ReverseStaticResponse(bodyBytes, tokenMap)
-			resp.Body = io.NopCloser(bytes.NewBuffer(reversedBytes))
-			resp.ContentLength = int64(len(reversedBytes))
-			resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(reversedBytes)))
+			if readErr != nil {
+				return readErr
+			}
+			protectedBody, _, protectErr := ProtectProviderResponseBody(r.Context(), tenantID, provider, body, tokenMap, customRules, GetRedactionRuntimeConfig(r.Context(), tenantID))
+			if protectErr != nil {
+				return protectErr
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(protectedBody))
+			resp.ContentLength = int64(len(protectedBody))
+			resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(protectedBody)))
+			resp.Header.Del("Content-Encoding")
+			return nil
+		}
+		if len(tokenMap) > 0 {
+			resp.ContentLength = -1
+			resp.Header.Del("Content-Length")
 		}
 		return nil
 	}
@@ -528,7 +551,7 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	EmitAuditEvent(event)
 
 	// Phase 14: Increment Bedrock usage counters after a successful response
-	if provider == "bedrock" && wrappedWriter.status == http.StatusOK {
+	if provider == ProviderBedrock && wrappedWriter.status == http.StatusOK {
 		// Estimate tokens from prompt count (Bedrock response body already consumed)
 		// 4 chars ≈ 1 token — rough estimate for cost tracking
 		estimatedTokens := 0

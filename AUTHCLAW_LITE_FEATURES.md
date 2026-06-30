@@ -38,7 +38,7 @@ Customer chatbot/API -> AuthClaw Gateway URL -> governance checks -> provider AP
    - Gateway scans prompt before sending it to provider.
    - If a `require_approval` rule matches, the request pauses.
    - Admin can approve or reject.
-   - If no decision is made within 5 minutes, the request auto-expires and blocks.
+   - If no decision is made within 30 minutes, the request auto-expires and blocks.
    - Only approved requests proceed to redaction and provider forwarding.
 
 6. Governance audit
@@ -135,7 +135,7 @@ regex_rules:
     reason: "Health context requires human approval before model egress."
     severity: high
     action: require_approval
-    hitl_timeout_seconds: 300
+    hitl_timeout_seconds: 1800
 
 model_rules:
   whitelist:

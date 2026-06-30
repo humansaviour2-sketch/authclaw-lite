@@ -49,11 +49,30 @@ const providerExamples = {
   },
   cohere: {
     label: "Cohere-compatible chat",
-    path: "/v1/chat",
+    path: "/v2/chat",
     header: "X-Provider: cohere",
     body: `{
   "model": "command-r",
-  "message": "My email is jane@example.com. Make this answer safe."
+  "messages": [
+    {
+      "role": "user",
+      "content": "My email is jane@example.com. Make this answer safe."
+    }
+  ]
+}`,
+  },
+  azure_openai: {
+    label: "Azure OpenAI-compatible chat",
+    path: "/v1/chat/completions",
+    header: "X-Provider: azure_openai",
+    body: `{
+  "model": "gpt-4o-mini",
+  "messages": [
+    {
+      "role": "user",
+      "content": "My email is jane@example.com. Can you summarize this?"
+    }
+  ]
 }`,
   },
   gemini: {
@@ -621,6 +640,7 @@ export default function ConnectPage() {
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
               <option value="cohere">Cohere</option>
+              <option value="azure_openai">Azure OpenAI</option>
               <option value="gemini">Gemini</option>
             </select>
           </label>
@@ -791,7 +811,7 @@ export default function ConnectPage() {
               HITL Approval Queue
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              High-risk policy matches wait here. If no one approves within 5 minutes, the gateway blocks the request.
+              High-risk policy matches wait here. If no one approves within 30 minutes, the gateway blocks the request.
             </p>
           </div>
           <button

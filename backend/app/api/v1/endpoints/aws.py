@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import get_tenant_db, require_scopes
 from app.db.models import AWSUsageLimits, AWSS3Document
+from app.services import ephemeral_workers
 
 logger = logging.getLogger("api.aws")
 router = APIRouter()
@@ -62,6 +63,8 @@ class S3SyncResponse(BaseModel):
     total_in_bucket: int
     bucket: str
     prefix: str
+    worker_token_id: Optional[UUID] = None
+    worker_run_id: Optional[UUID] = None
 
 
 class S3DocumentResponse(BaseModel):
@@ -196,6 +199,31 @@ def sync_s3_documents(
 
     tenant_id = str(request.state.tenant_id)
     prefix = f"tenant-{tenant_id}/"
+    request_id = request.headers.get("x-request-id", "")
+
+    worker_token = ephemeral_workers.issue_worker_token(
+        db,
+        tenant_id=request.state.tenant_id,
+        connector="aws",
+        action_id="s3.sync",
+        purpose="scan",
+        scopes=["aws:s3:read"],
+        issued_by=getattr(request.state, "user_id", None),
+        ttl_seconds=ephemeral_workers.DEFAULT_TTL_SECONDS,
+        metadata={"bucket": bucket, "prefix": prefix, "source": "aws.s3.sync"},
+        request_id=request_id,
+    )
+    worker_auth = ephemeral_workers.authorize_worker_action(
+        db,
+        tenant_id=request.state.tenant_id,
+        raw_token=worker_token.raw_token,
+        connector="aws",
+        action="s3.sync",
+        request_id=request_id,
+        metadata={"bucket": bucket, "prefix": prefix},
+    )
+    if not worker_auth.allowed:
+        raise HTTPException(status_code=403, detail=worker_auth.reason)
 
     try:
         import boto3
@@ -278,6 +306,8 @@ def sync_s3_documents(
             total_in_bucket=total_in_bucket,
             bucket=bucket,
             prefix=prefix,
+            worker_token_id=worker_token.token.id,
+            worker_run_id=worker_auth.run.id,
         )
 
     except HTTPException:

@@ -22,13 +22,15 @@ from app.orchestrator.graph import (
     ComplianceState,
     ExecutionStatus,
     WorkflowState,
+    RemediationState,
     build_compliance_graph,
     awaiting_approval,
     execute_remediation,
+    rollback_remediation,
     verify_results,
 )
 # Phase 16 & 17: evidence & findings services — imported here in the runner, never in graph nodes
-from app.services import evidence_service, findings_service
+from app.services import event_backbone, evidence_service, findings_service
 
 logger = logging.getLogger("orchestrator.runner")
 
@@ -67,10 +69,24 @@ def emit_audit_event(
     transition: str,
     action: str,
     status: str,
+    extra_trace: Optional[list[str]] = None,
 ) -> None:
     """Emit a workflow audit event through the Kafka pipeline."""
+    execution_trace = [
+        f"workflow_id={workflow_id}",
+        f"transition={transition}",
+    ]
+    if extra_trace:
+        execution_trace.extend(extra_trace)
+
     event = {
-        "id": str(uuid.uuid4()),
+        "id": event_backbone.stable_event_id(
+            event_type="workflow",
+            tenant_id=tenant_id,
+            subject_id=workflow_id,
+            action=f"{transition}:{action}:{status}:{request_id or ''}",
+            trace=execution_trace,
+        ),
         "request_id": request_id or "",
         "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         "tenant_id": tenant_id,
@@ -84,15 +100,16 @@ def emit_audit_event(
         "response_status": 0,
         "duration_ms": 0,
         "frameworks_affected": [],
-        "execution_trace": [f"workflow_id={workflow_id}", f"transition={transition}"],
+        "execution_trace": execution_trace,
     }
 
     _init_kafka_producer()
     if _kafka_producer:
         try:
-            future = _kafka_producer.send("audit.events", key=tenant_id, value=event)
+            future = _kafka_producer.send(event_backbone.AUDIT_EVENTS_TOPIC, key=event_backbone.tenant_key(tenant_id), value=event)
             future.get(timeout=5)
         except Exception as exc:
+            event_backbone.increment_metric("backend_audit_publish_failures_total")
             logger.warning("Failed to emit audit event to Kafka: %s", exc)
 
     logger.info(
@@ -338,6 +355,9 @@ class ComplianceWorkflowRunner:
             "findings": [],
             "risk_score": 0.0,
             "remediation_plan": [],
+            "remediation_state": RemediationState.NOT_STARTED.value,
+            "remediation_actions": [],
+            "rollback_result": {},
             "approval_status": "",
             "approval_id": "",
             "execution_status": ExecutionStatus.RUNNING.value,
@@ -378,6 +398,22 @@ class ComplianceWorkflowRunner:
 
         # Return sanitized state (no internal callbacks)
         return {k: v for k, v in final_state.items() if not k.startswith("_")}
+
+    def _drive_remediation_states(self, state: ComplianceState) -> ComplianceState:
+        """Continue active remediation nodes until pause or terminal state."""
+        for _ in range(12):
+            current = state.get("current_state")
+            if current == WorkflowState.EXECUTE_REMEDIATION.value:
+                state = execute_remediation(state)
+                continue
+            if current == WorkflowState.VERIFY_RESULTS.value:
+                state = verify_results(state)
+                continue
+            if current == WorkflowState.ROLLBACK_REMEDIATION.value:
+                state = rollback_remediation(state)
+                continue
+            break
+        return state
 
     def resume(
         self,
@@ -440,13 +476,13 @@ class ComplianceWorkflowRunner:
                     state = awaiting_approval(state)
                     approval_status = state.get("approval_status", "PENDING")
                     if approval_status == "APPROVED":
-                        state = execute_remediation(state)
-                        state = verify_results(state)
-                elif current == WorkflowState.EXECUTE_REMEDIATION.value:
-                    state = execute_remediation(state)
-                    state = verify_results(state)
-                elif current == WorkflowState.VERIFY_RESULTS.value:
-                    state = verify_results(state)
+                        state = self._drive_remediation_states(state)
+                elif current in (
+                    WorkflowState.EXECUTE_REMEDIATION.value,
+                    WorkflowState.VERIFY_RESULTS.value,
+                    WorkflowState.ROLLBACK_REMEDIATION.value,
+                ):
+                    state = self._drive_remediation_states(state)
 
             except Exception as exc:
                 logger.error("Workflow %s resume failed: %s", workflow_id, exc)
@@ -478,6 +514,8 @@ class ComplianceWorkflowRunner:
         if not wf:
             return None
 
+        state_data = wf.state_data or {}
+        execution_result = wf.execution_result or {}
         return {
             "workflow_id": wf.workflow_id,
             "tenant_id": str(wf.tenant_id),
@@ -487,6 +525,9 @@ class ComplianceWorkflowRunner:
             "risk_score": wf.risk_score,
             "findings": wf.findings,
             "remediation_plan": wf.remediation_plan,
+            "remediation_state": state_data.get("remediation_state") or execution_result.get("remediation_state"),
+            "remediation_actions": state_data.get("remediation_actions") or execution_result.get("actions"),
+            "rollback_result": state_data.get("rollback_result"),
             "approval_status": wf.approval_status,
             "approval_id": str(wf.approval_id) if wf.approval_id else None,
             "execution_result": wf.execution_result,

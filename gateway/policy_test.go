@@ -13,6 +13,56 @@ import (
 	"github.com/lib/pq"
 )
 
+func TestValidatePolicyYAMLRejectsInvalidSRSFields(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "require approval timeout above SRS cap",
+			yaml: `
+regex_rules:
+  - name: medical_review
+    pattern: "(?i)diagnosis"
+    action: require_approval
+    hitl_timeout_seconds: 1801
+`,
+			want: "hitl_timeout_seconds",
+		},
+		{
+			name: "topic rule without allowed models",
+			yaml: `
+topic_rules:
+  - topic: medical
+    allowed_models: []
+`,
+			want: "allowed model",
+		},
+		{
+			name: "regex rule without pattern",
+			yaml: `
+regex_rules:
+  - name: missing_pattern
+    action: block
+`,
+			want: "missing pattern",
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ValidatePolicyYAML(tt.yaml)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected error containing %q, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
 func TestPolicyEnforcement(t *testing.T) {
 	// 1. Init DB and Redis
 	InitDB()
@@ -119,8 +169,10 @@ model_rules:
 	t.Run("Regex_Based_Blocking_Rules", func(t *testing.T) {
 		policyYAML := `
 regex_rules:
-  - pattern: "(?i)confidential"
+  - name: confidentiality_block
+    pattern: "(?i)confidential"
     reason: "Confidentiality rules block"
+    action: block
 `
 		// Update Tenant A policy
 		_, _ = DB.Exec("DELETE FROM policies WHERE tenant_id = $1", tenantA)
@@ -141,7 +193,7 @@ regex_rules:
 		if allow {
 			t.Errorf("Expected matching prompt to be blocked")
 		}
-		if !strings.Contains(reason, "Regex block") {
+		if !strings.Contains(reason, "confidentiality_block") {
 			t.Errorf("Expected regex block reason, got: %s", reason)
 		}
 	})
@@ -185,7 +237,7 @@ rate_limits:
 		_, _ = DB.Exec("DELETE FROM policies")
 		_, _ = DB.Exec("INSERT INTO policies (id, tenant_id, name, policy_yaml, version, is_active, created_by) VALUES (gen_random_uuid(), $1, 'Limit A', $2, 1, true, $3)", tenantA, policyYAML, userA)
 		_, _ = DB.Exec("INSERT INTO policies (id, tenant_id, name, policy_yaml, version, is_active, created_by) VALUES (gen_random_uuid(), $1, 'Limit B', $2, 1, true, $3)", tenantB, policyYAML, userB)
-		
+
 		InvalidatePolicyCache(tenantA)
 		InvalidatePolicyCache(tenantB)
 
@@ -370,6 +422,18 @@ func TestProxyIntegrationWithPolicy(t *testing.T) {
 	apiKey := "authclaw_proxy_policy_key_1"
 	keyHash := HashKey(apiKey)
 	_, _ = DB.Exec("INSERT INTO api_keys (id, tenant_id, key_hash, name, scopes, is_active, created_by) VALUES (gen_random_uuid(), $1, $2, 'Proxy Policy Key', $3, true, $4)", tenantID, keyHash, pq.Array([]string{"read"}), userID)
+	encryptedProviderKey, err := EncryptSecret("sk-test-provider")
+	if err != nil {
+		t.Fatalf("Failed to encrypt provider key: %v", err)
+	}
+	_, _ = DB.Exec(
+		`INSERT INTO provider_credentials (
+			id, tenant_id, provider, display_name, endpoint, encrypted_secret, auth_scheme, status, created_by, version
+		) VALUES (
+			gen_random_uuid(), $1, 'openai', 'Policy OpenAI', $2, $3, 'api_key', 'active', $4, 1
+		)`,
+		tenantID, targetServer.URL, encryptedProviderKey, userID,
+	)
 
 	// Point config to mock server
 	_, _ = DB.Exec("DELETE FROM gateway_configs WHERE tenant_id = $1", tenantID)

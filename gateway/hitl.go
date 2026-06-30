@@ -33,11 +33,11 @@ func promptHashes(prompts []string) []string {
 
 func hitlTimeout(rule RegexRule) time.Duration {
 	if rule.HITLTimeoutSeconds <= 0 {
-		return 5 * time.Minute
+		return 30 * time.Minute
 	}
 	timeout := time.Duration(rule.HITLTimeoutSeconds) * time.Second
-	if timeout > 5*time.Minute {
-		return 5 * time.Minute
+	if timeout > 30*time.Minute {
+		return 30 * time.Minute
 	}
 	if timeout < 10*time.Second {
 		return 10 * time.Second

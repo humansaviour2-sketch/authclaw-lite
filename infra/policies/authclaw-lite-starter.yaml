@@ -10,7 +10,7 @@ regex_rules:
     reason: "Health context requires human approval before model egress."
     severity: high
     action: require_approval
-    hitl_timeout_seconds: 300
+    hitl_timeout_seconds: 1800
 
   - name: ssn_block
     pattern: "\\b\\d{3}-\\d{2}-\\d{4}\\b"

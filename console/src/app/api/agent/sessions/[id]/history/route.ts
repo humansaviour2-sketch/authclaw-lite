@@ -9,7 +9,7 @@ export async function GET(
     const { id } = await params;
     const data = await backendFetch(`/v1/chat/sessions/${id}/history`);
     return NextResponse.json(data);
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json({ error: (error instanceof Error ? error.message : "Request failed") }, { status: 500 });
   }
 }

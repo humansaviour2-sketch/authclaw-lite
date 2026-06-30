@@ -10,14 +10,14 @@ import (
 
 func TestPayloadFidelityContractOpenAI(t *testing.T) {
 	expectedResponse := `{"id":"chatcmpl-123","object":"chat.completion","created":1677858242,"model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}]}`
-	
+
 	openaiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bodyBytes, _ := io.ReadAll(r.Body)
 		expectedRequest := `{"model":"gpt-4","messages":[{"role":"user","content":"Hi"}]}`
 		if strings.TrimSpace(string(bodyBytes)) != expectedRequest {
 			t.Errorf("Request body corrupted. Expected: %s, Got: %s", expectedRequest, string(bodyBytes))
 		}
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(expectedResponse))
@@ -42,14 +42,14 @@ func TestPayloadFidelityContractOpenAI(t *testing.T) {
 
 func TestPayloadFidelityContractAnthropic(t *testing.T) {
 	expectedResponse := `{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"text","text":"Hello!"}],"model":"claude-3-opus"}`
-	
+
 	anthropicServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bodyBytes, _ := io.ReadAll(r.Body)
 		expectedRequest := `{"model":"claude-3-opus","messages":[{"role":"user","content":"Hi"}]}`
 		if strings.TrimSpace(string(bodyBytes)) != expectedRequest {
 			t.Errorf("Request body corrupted. Expected: %s, Got: %s", expectedRequest, string(bodyBytes))
 		}
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(expectedResponse))
@@ -110,6 +110,77 @@ func TestPayloadFidelityContractGemini(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer some-gateway-key")
 	w := httptest.NewRecorder()
 
+	proxy.ServeHTTP(w, req)
+
+	resp := w.Result()
+	responseBodyBytes, _ := io.ReadAll(resp.Body)
+	if string(responseBodyBytes) != expectedResponse {
+		t.Errorf("Response body corrupted. Expected: %s, Got: %s", expectedResponse, string(responseBodyBytes))
+	}
+}
+
+func TestPayloadFidelityContractCohereV2Chat(t *testing.T) {
+	expectedResponse := `{"id":"chat-123","message":{"role":"assistant","content":[{"type":"text","text":"Hello!"}]},"finish_reason":"COMPLETE"}`
+
+	cohereServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/chat" {
+			t.Errorf("Expected Cohere /v2/chat path, got %s", r.URL.Path)
+		}
+		bodyBytes, _ := io.ReadAll(r.Body)
+		expectedRequest := `{"model":"command-r-plus","messages":[{"role":"user","content":"Hi"}]}`
+		if strings.TrimSpace(string(bodyBytes)) != expectedRequest {
+			t.Errorf("Request body corrupted. Expected: %s, Got: %s", expectedRequest, string(bodyBytes))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(expectedResponse))
+	}))
+	defer cohereServer.Close()
+
+	proxy := NewProxyServer()
+	proxy.CohereBaseURL = cohereServer.URL
+
+	req := httptest.NewRequest("POST", "/v2/chat", strings.NewReader(`{"model":"command-r-plus","messages":[{"role":"user","content":"Hi"}]}`))
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+
+	resp := w.Result()
+	responseBodyBytes, _ := io.ReadAll(resp.Body)
+	if string(responseBodyBytes) != expectedResponse {
+		t.Errorf("Response body corrupted. Expected: %s, Got: %s", expectedResponse, string(responseBodyBytes))
+	}
+}
+
+func TestPayloadFidelityContractAzureOpenAIChat(t *testing.T) {
+	expectedResponse := `{"id":"chatcmpl-azure-123","object":"chat.completion","model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}]}`
+
+	azureServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		expectedPath := "/openai/deployments/customer-gpt4/chat/completions"
+		if r.URL.Path != expectedPath {
+			t.Errorf("Expected Azure path %s, got %s", expectedPath, r.URL.Path)
+		}
+		if r.URL.Query().Get("api-version") != "2024-10-21" {
+			t.Errorf("Expected api-version query, got %q", r.URL.RawQuery)
+		}
+		bodyBytes, _ := io.ReadAll(r.Body)
+		expectedRequest := `{"model":"gpt-4o","messages":[{"role":"user","content":"Hi"}]}`
+		if strings.TrimSpace(string(bodyBytes)) != expectedRequest {
+			t.Errorf("Request body corrupted. Expected: %s, Got: %s", expectedRequest, string(bodyBytes))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(expectedResponse))
+	}))
+	defer azureServer.Close()
+
+	proxy := NewProxyServer()
+	proxy.AzureOpenAIBaseURL = azureServer.URL
+
+	req := httptest.NewRequest("POST", "/openai/deployments/customer-gpt4/chat/completions?api-version=2024-10-21", strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"Hi"}]}`))
+	req.Header.Set("X-Provider", "azure_openai")
+	w := httptest.NewRecorder()
 	proxy.ServeHTTP(w, req)
 
 	resp := w.Result()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"net/http"
 	"strings"
@@ -57,14 +58,15 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		keyHash := HashKey(apiKey)
 
 		// 2. Query DB to validate key and retrieve tenant_id
+		var apiKeyID string
 		var tenantID string
 		var userID string
 		var scopes []string
 
 		err := DB.QueryRow(
-			"SELECT tenant_id, scopes, created_by FROM resolve_api_key($1)",
+			"SELECT id, tenant_id, scopes, created_by FROM resolve_api_key($1)",
 			keyHash,
-		).Scan(&tenantID, pq.Array(&scopes), &userID)
+		).Scan(&apiKeyID, &tenantID, pq.Array(&scopes), &userID)
 
 		if err != nil {
 			http.Error(w, "Unauthorized: Invalid or expired API Key", http.StatusUnauthorized)
@@ -78,6 +80,31 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			requestID = generateRequestID()
 		}
 		w.Header().Set("X-Request-ID", requestID)
+		userAgent := r.UserAgent()
+		if len(userAgent) > 512 {
+			userAgent = userAgent[:512]
+		}
+		remoteIP := r.RemoteAddr
+		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+			remoteIP = strings.TrimSpace(strings.Split(forwarded, ",")[0])
+		}
+		_ = RunInTenantTx(r.Context(), tenantID, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(
+				r.Context(),
+				`UPDATE api_keys
+				 SET last_used = NOW(),
+				     last_used_ip = $2,
+				     last_used_user_agent = $3,
+				     last_used_request_id = $4,
+				     updated_at = NOW()
+				 WHERE id = $1`,
+				apiKeyID,
+				remoteIP,
+				userAgent,
+				requestID,
+			)
+			return err
+		})
 
 		ctx := context.WithValue(r.Context(), TenantIDContextKey, tenantID)
 		ctx = context.WithValue(ctx, ScopesContextKey, scopes)

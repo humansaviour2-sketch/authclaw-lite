@@ -18,6 +18,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import Finding, EvidenceRecord
+from app.services import event_backbone
 
 logger = logging.getLogger("services.findings")
 
@@ -53,7 +54,13 @@ def _init_kafka_producer():
 def _emit_finding_audit(finding_id: str, tenant_id: str, framework: str, action: str) -> None:
     """Emit a FINDING_CREATED or FINDING_UPDATED Kafka audit event. Never raises."""
     event = {
-        "id": str(uuid.uuid4()),
+        "id": event_backbone.stable_event_id(
+            event_type="finding",
+            tenant_id=tenant_id,
+            subject_id=finding_id,
+            action=f"{action}:{framework}",
+            trace=[f"finding_id={finding_id}"],
+        ),
         "request_id": "",
         "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         "tenant_id": tenant_id,
@@ -73,9 +80,10 @@ def _emit_finding_audit(finding_id: str, tenant_id: str, framework: str, action:
     _init_kafka_producer()
     if _kafka_producer:
         try:
-            future = _kafka_producer.send("audit.events", key=tenant_id, value=event)
+            future = _kafka_producer.send(event_backbone.AUDIT_EVENTS_TOPIC, key=event_backbone.tenant_key(tenant_id), value=event)
             future.get(timeout=5)
         except Exception as exc:
+            event_backbone.increment_metric("backend_audit_publish_failures_total")
             logger.warning("Failed to emit %s audit event to Kafka: %s", action, exc)
 
     logger.info(

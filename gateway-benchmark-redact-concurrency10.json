@@ -1,0 +1,31 @@
+{
+  "gateway_url": "http://localhost:8080",
+  "provider": "gemini",
+  "model": "gemini-2.5-flash-lite",
+  "requests_per_scenario": 100,
+  "concurrency": 10,
+  "p95_threshold_ms": 1200.0,
+  "p99_threshold_ms": 1500.0,
+  "reports": [
+    {
+      "scenario": "redact",
+      "requests": 100,
+      "successes": 100,
+      "failures": 0,
+      "status_counts": {
+        "200": 100
+      },
+      "throughput_rps": 16.909135211027856,
+      "min_ms": 356.85709999961546,
+      "p50_ms": 543.9224000001559,
+      "p95_ms": 889.6565200007898,
+      "p99_ms": 1017.6494739991726,
+      "max_ms": 1102.4601999997685,
+      "mean_ms": 566.4123179998751,
+      "first_byte_p50_ms": 543.7968999995064,
+      "first_byte_p95_ms": 889.541989999543,
+      "first_byte_p99_ms": 1017.4664639988991,
+      "errors": []
+    }
+  ]
+}

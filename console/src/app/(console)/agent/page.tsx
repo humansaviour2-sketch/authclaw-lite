@@ -5,22 +5,21 @@ import {
   Bot, 
   Send, 
   ShieldCheck, 
-  Cpu, 
   AlertTriangle, 
   CheckCircle2, 
   XCircle, 
   X,
-  Play, 
   User, 
   Sparkles,
-  Layers,
   KeyRound,
   Lock,
   Loader2,
   Terminal,
   Activity,
   Plus,
-  MessageSquare
+  MessageSquare,
+  ExternalLink,
+  BookOpen
 } from "lucide-react";
 
 interface Workflow {
@@ -30,6 +29,15 @@ interface Workflow {
   current_state: string;
   execution_status: string;
   risk_score: number | null;
+  findings?: Finding[];
+  remediation_plan?: RemediationPlan[];
+  remediation_state?: string | null;
+  remediation_actions?: RemediationAction[];
+  rollback_result?: RollbackResult | null;
+  execution_result?: RemediationExecutionResult | null;
+  error_message?: string | null;
+  retry_count?: number;
+  state_data?: WorkflowStateData;
   started_at: string;
   completed_at: string | null;
   approval_id: string | null;
@@ -49,7 +57,247 @@ interface Message {
   sender: "user" | "agent";
   text: string;
   timestamp: Date;
-  results?: any;
+  results?: AgentResult;
+}
+
+interface ChatSession {
+  id: string;
+  title: string;
+}
+
+interface ChatHistoryMessage {
+  sender: "user" | "agent";
+  text: string;
+  timestamp: string;
+  results?: AgentResult;
+}
+
+interface Finding {
+  control?: string;
+  status?: string;
+  description?: string;
+  evidence?: string;
+}
+
+interface RemediationPlan {
+  action?: string;
+  priority?: string;
+  finding_control?: string;
+  estimated_effort?: string;
+}
+
+interface RAGCitation {
+  id: string;
+  framework: string;
+  section_id: string;
+  label: string;
+  title: string;
+  source_name: string;
+  url: string;
+  score: number;
+}
+
+interface RAGChunk extends RAGCitation {
+  text: string;
+}
+
+interface RAGAnswerResult {
+  type: "rag_answer";
+  question: string;
+  corpus_version?: string | null;
+  corpus_checksum?: string | null;
+  grounded: boolean;
+  citations: RAGCitation[];
+  retrieved_chunks: RAGChunk[];
+}
+
+interface RemediationAction {
+  id?: string;
+  finding_control?: string;
+  action?: string;
+  status?: string;
+  attempts?: number;
+  completed_at?: string;
+  last_error?: string;
+  rollback_result?: {
+    status?: string;
+    details?: string;
+  };
+  result?: {
+    control?: string;
+    details?: string;
+  };
+}
+
+interface RollbackResult {
+  rollback_successful?: number;
+  rollback_failed?: number;
+}
+
+interface RemediationExecutionResult {
+  remediation_state?: string;
+  actions_successful?: number;
+  actions_executed?: number;
+  actions?: RemediationAction[];
+}
+
+interface WorkflowStateData {
+  remediation_actions?: RemediationAction[];
+  rollback_result?: RollbackResult | null;
+}
+
+type WorkflowInspection = Partial<Workflow> & {
+  workflow_id?: string;
+};
+
+type AgentResult = WorkflowInspection | RAGAnswerResult;
+
+const errorMessage = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
+
+const isRagResult = (result?: AgentResult | null): result is RAGAnswerResult => {
+  return Boolean(result && "type" in result && result.type === "rag_answer");
+};
+
+const isWorkflowResult = (result?: AgentResult | null): result is WorkflowInspection => {
+  return Boolean(result && "workflow_id" in result && result.workflow_id);
+};
+
+const formatStateLabel = (value?: string | null) => {
+  if (!value) return "Not Started";
+  return value.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const getRemediationActions = (workflow?: WorkflowInspection | null): RemediationAction[] => {
+  return workflow?.remediation_actions || workflow?.execution_result?.actions || workflow?.state_data?.remediation_actions || [];
+};
+
+const getRollbackResult = (workflow?: WorkflowInspection | null): RollbackResult | null => {
+  return workflow?.rollback_result || workflow?.state_data?.rollback_result || null;
+};
+
+const getActionStatusClass = (status?: string) => {
+  switch (status) {
+    case "SUCCEEDED":
+    case "ROLLED_BACK":
+      return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+    case "FAILED":
+    case "ROLLBACK_FAILED":
+      return "bg-red-500/10 text-red-400 border-red-500/20";
+    case "RUNNING":
+      return "bg-sky-500/10 text-sky-400 border-sky-500/20 animate-pulse";
+    default:
+      return "bg-slate-800/70 text-slate-400 border-slate-700";
+  }
+};
+
+function RemediationTimeline({ workflow }: { workflow: WorkflowInspection }) {
+  const actions = getRemediationActions(workflow);
+  const rollback = getRollbackResult(workflow);
+  const result = workflow?.execution_result || {};
+  const remediationState = workflow?.remediation_state || result.remediation_state || "NOT_STARTED";
+
+  if (!actions.length && !workflow?.approval_id && !workflow?.error_message) {
+    return (
+      <div className="space-y-2 text-[10px] text-slate-400">
+        <div className="flex items-center gap-2">
+          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+          <span>Initial scan completed.</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Activity className="w-3.5 h-3.5 text-slate-500" />
+          <span>No remediation has been applied yet.</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-850 pb-2">
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-wider text-slate-500">State Machine</p>
+          <p className="text-slate-250 font-bold">{formatStateLabel(remediationState)}</p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-[9px]">
+          <span className="px-2 py-0.5 rounded-full border border-slate-700 bg-slate-900/40 text-slate-400">
+            {result.actions_successful ?? 0}/{result.actions_executed ?? actions.length} successful
+          </span>
+          {typeof workflow?.retry_count === "number" && workflow.retry_count > 0 && (
+            <span className="px-2 py-0.5 rounded-full border border-amber-500/20 bg-amber-500/10 text-amber-400">
+              {workflow.retry_count} retr{workflow.retry_count === 1 ? "y" : "ies"}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {workflow?.approval_id && !actions.length && (
+        <div className="flex items-center gap-2 text-[10px] text-amber-400">
+          <AlertTriangle className="w-3.5 h-3.5" />
+          <span>Awaiting approval: {workflow.approval_id}</span>
+        </div>
+      )}
+
+      {actions.length > 0 && (
+        <div className="space-y-2">
+          {actions.map((action: RemediationAction, idx: number) => (
+            <div key={action.id || idx} className="relative pl-5">
+              <div className="absolute left-1.5 top-1 h-full w-px bg-slate-800" />
+              <div className={`absolute left-0 top-1.5 h-3 w-3 rounded-full border ${
+                action.status === "FAILED" || action.status === "ROLLBACK_FAILED"
+                  ? "bg-red-500/20 border-red-400"
+                  : action.status === "SUCCEEDED" || action.status === "ROLLED_BACK"
+                    ? "bg-emerald-500/20 border-emerald-400"
+                    : "bg-sky-500/20 border-sky-400"
+              }`} />
+              <div className="rounded border border-slate-850 bg-[#050509] p-2.5 space-y-1.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-mono text-[10px] text-slate-300 break-all">{action.finding_control || action.result?.control || "Unknown control"}</p>
+                    <p className="text-[10px] text-slate-500 leading-normal">{action.action || action.result?.details || "Remediation action"}</p>
+                  </div>
+                  <span className={`shrink-0 px-1.5 py-0.5 rounded border text-[8px] font-black uppercase ${getActionStatusClass(action.status)}`}>
+                    {formatStateLabel(action.status)}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2 text-[9px] text-slate-500">
+                  <span>Attempts: {action.attempts || 0}</span>
+                  {action.completed_at && <span>Completed: {new Date(action.completed_at).toLocaleTimeString()}</span>}
+                  {action.last_error && <span className="text-red-400">Error: {action.last_error}</span>}
+                </div>
+                {action.rollback_result && (
+                  <div className="rounded border border-emerald-500/10 bg-emerald-500/5 p-2 text-[9px] text-emerald-300 leading-normal">
+                    Rollback: {action.rollback_result.details || action.rollback_result.status}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {rollback && (
+        <div className="rounded border border-slate-800 bg-slate-950/50 p-2.5 text-[10px] space-y-1">
+          <div className="flex items-center gap-2 text-slate-300 font-bold">
+            {(rollback.rollback_failed || 0) > 0 ? (
+              <XCircle className="w-3.5 h-3.5 text-red-400" />
+            ) : (
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+            )}
+            <span>Rollback Result</span>
+          </div>
+          <p className="text-slate-500">
+            {rollback.rollback_successful || 0} succeeded, {rollback.rollback_failed || 0} failed.
+          </p>
+        </div>
+      )}
+
+      {workflow?.error_message && (
+        <div className="rounded border border-red-500/20 bg-red-500/10 p-2 text-[10px] text-red-300">
+          {workflow.error_message}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function AgentPage() {
@@ -57,10 +305,9 @@ export default function AgentPage() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [loading, setLoading] = useState(true);
-  const [triggeringScan, setTriggeringScan] = useState(false);
 
   // Chat Sessions States
-  const [sessions, setSessions] = useState<any[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionsLoading, setSessionsLoading] = useState(false);
 
@@ -74,7 +321,7 @@ export default function AgentPage() {
   ]);
   const [input, setInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
-  const [selectedResult, setSelectedResult] = useState<any>(null);
+  const [selectedResult, setSelectedResult] = useState<AgentResult | null>(null);
   const [showRawJson, setShowRawJson] = useState(false);
   const [remediating, setRemediating] = useState(false);
 
@@ -103,8 +350,8 @@ export default function AgentPage() {
       const updatedWorkflow = await res.json();
       setSelectedResult(updatedWorkflow);
       await fetchWorkflowsAndApprovals();
-    } catch (err: any) {
-      alert(err.message || "Error starting remediation");
+    } catch (err: unknown) {
+      alert(errorMessage(err, "Error starting remediation"));
     } finally {
       setRemediating(false);
     }
@@ -121,8 +368,8 @@ export default function AgentPage() {
       const data = await res.json();
       setWorkflows(data.workflows || []);
       setApprovals(data.approvals || []);
-    } catch (err: any) {
-      console.warn("Agent fetchWorkflowsAndApprovals failed:", err.message);
+    } catch (err: unknown) {
+      console.warn("Agent fetchWorkflowsAndApprovals failed:", errorMessage(err, "Unknown error"));
     } finally {
       setLoading(false);
     }
@@ -138,8 +385,8 @@ export default function AgentPage() {
       if (autoSelect && data && data.length > 0) {
         setActiveSessionId(data[0].id);
       }
-    } catch (err: any) {
-      console.warn("fetchSessions failed:", err.message);
+    } catch (err: unknown) {
+      console.warn("fetchSessions failed:", errorMessage(err, "Unknown error"));
     } finally {
       setSessionsLoading(false);
     }
@@ -152,7 +399,7 @@ export default function AgentPage() {
       if (!res.ok) throw new Error("Failed to load message history");
       const data = await res.json();
       if (data && data.length > 0) {
-        setMessages(data.map((m: any) => ({
+        setMessages((data as ChatHistoryMessage[]).map((m) => ({
           sender: m.sender,
           text: m.text,
           timestamp: new Date(m.timestamp),
@@ -167,8 +414,8 @@ export default function AgentPage() {
           }
         ]);
       }
-    } catch (err: any) {
-      console.warn("fetchSessionHistory failed:", err.message);
+    } catch (err: unknown) {
+      console.warn("fetchSessionHistory failed:", errorMessage(err, "Unknown error"));
     } finally {
       setChatLoading(false);
     }
@@ -209,32 +456,8 @@ export default function AgentPage() {
           timestamp: new Date()
         }
       ]);
-    } catch (err: any) {
-      alert(err.message || "Error creating new chat");
-    }
-  };
-
-  const triggerScan = async (framework: string) => {
-    setTriggeringScan(true);
-    try {
-      const res = await fetch("/api/workflows", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ framework }),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "Failed to start workflow");
-      }
-
-      const newScan = await res.json();
-      await fetchWorkflowsAndApprovals();
-      return newScan;
-    } catch (err: any) {
-      throw err;
-    } finally {
-      setTriggeringScan(false);
+    } catch (err: unknown) {
+      alert(errorMessage(err, "Error creating new chat"));
     }
   };
 
@@ -256,8 +479,8 @@ export default function AgentPage() {
         sessionId = newSession.id;
         setActiveSessionId(newSession.id);
         setSessions((prev) => [newSession, ...prev]);
-      } catch (err: any) {
-        alert(err.message || "Could not start new chat session");
+      } catch (err: unknown) {
+        alert(errorMessage(err, "Could not start new chat session"));
         return;
       }
     }
@@ -280,9 +503,9 @@ export default function AgentPage() {
       }
 
       const data = await res.json();
-      let responseText = data.text || "No response received.";
-      let resultsData = data.results || null;
-      let newTitle = data.session_title;
+      const responseText = data.text || "No response received.";
+      const resultsData = data.results || null;
+      const newTitle = data.session_title;
 
       setMessages((prev) => [
         ...prev, 
@@ -301,10 +524,10 @@ export default function AgentPage() {
       }
 
       await fetchWorkflowsAndApprovals();
-    } catch (err: any) {
+    } catch (err: unknown) {
       setMessages((prev) => [
         ...prev, 
-        { sender: "agent", text: `Failed to execute request: ${err.message}`, timestamp: new Date() }
+        { sender: "agent", text: `Failed to execute request: ${errorMessage(err, "Unknown error")}`, timestamp: new Date() }
       ]);
     } finally {
       setChatLoading(false);
@@ -347,8 +570,8 @@ export default function AgentPage() {
       setShowMfaInput(false);
       setSelectedApproval(null);
       await fetchWorkflowsAndApprovals();
-    } catch (err: any) {
-      setMfaError(err.message || "Could not authorize action");
+    } catch (err: unknown) {
+      setMfaError(errorMessage(err, "Could not authorize action"));
     } finally {
       setApproving(false);
     }
@@ -370,8 +593,8 @@ export default function AgentPage() {
       }
 
       await fetchWorkflowsAndApprovals();
-    } catch (err: any) {
-      alert(err.message || "Error rejecting approval");
+    } catch (err: unknown) {
+      alert(errorMessage(err, "Error rejecting approval"));
     }
   };
 
@@ -490,12 +713,35 @@ export default function AgentPage() {
                           : "bg-slate-850/40 border border-slate-800 text-slate-300 rounded-tl-none"
                       }`}>
                         <pre className="whitespace-pre-wrap font-sans">{msg.text}</pre>
+                        {isRagResult(msg.results) && msg.results.citations.length > 0 && (
+                          <div className="mt-3 space-y-1.5">
+                            <div className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Grounding Evidence</div>
+                            {msg.results.citations.slice(0, 3).map((citation: RAGCitation) => (
+                              <a
+                                key={`${citation.id}-${citation.url}`}
+                                href={citation.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex items-start gap-2 rounded-lg border border-slate-800 bg-[#07070a]/70 px-2 py-1.5 text-[10px] text-slate-350 hover:border-indigo-500/50 hover:text-indigo-300 transition"
+                              >
+                                <BookOpen className="mt-0.5 h-3 w-3 flex-shrink-0 text-indigo-400" />
+                                <span className="min-w-0 flex-1">
+                                  <span className="font-mono font-bold text-slate-200">{citation.id}</span>
+                                  <span className="block truncate">{citation.label}</span>
+                                </span>
+                                <ExternalLink className="mt-0.5 h-3 w-3 flex-shrink-0 text-slate-500" />
+                              </a>
+                            ))}
+                          </div>
+                        )}
                         {msg.results && (
                           <button
-                            onClick={() => setSelectedResult(msg.results)}
+                            onClick={() => {
+                              if (msg.results) setSelectedResult(msg.results);
+                            }}
                             className="mt-2 text-[10px] font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 underline transition cursor-pointer"
                           >
-                            View Results JSON
+                            {isRagResult(msg.results) ? "View RAG Evidence" : "View Results JSON"}
                           </button>
                         )}
                       </div>
@@ -541,8 +787,22 @@ export default function AgentPage() {
                   {workflows.map((wf) => {
                     const isCompleted = wf.execution_status === "COMPLETED";
                     const isPaused = wf.execution_status === "PAUSED";
+                    const isSelected = isWorkflowResult(selectedResult) && selectedResult.workflow_id === wf.workflow_id;
+                    const remediationActionCount = getRemediationActions(wf).length;
                     return (
-                      <div key={wf.id} className="p-4 rounded-xl border border-slate-800 bg-[#0c0c12]/40 space-y-3">
+                      <button
+                        key={wf.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedResult(wf);
+                          setShowRawJson(false);
+                        }}
+                        className={`w-full text-left p-4 rounded-xl border bg-[#0c0c12]/40 space-y-3 transition cursor-pointer ${
+                          isSelected
+                            ? "border-indigo-500/60 shadow-[0_0_0_1px_rgba(99,102,241,0.25)]"
+                            : "border-slate-800 hover:border-slate-700"
+                        }`}
+                      >
                         <div className="flex justify-between items-start">
                           <div>
                             <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
@@ -588,7 +848,22 @@ export default function AgentPage() {
                             </span>
                           </div>
                         </div>
-                      </div>
+                        {(wf.remediation_state || remediationActionCount > 0 || wf.error_message) && (
+                          <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-850/60">
+                            <span className={`px-2 py-0.5 rounded-full border text-[9px] font-black uppercase ${getActionStatusClass(wf.remediation_state || "PENDING")}`}>
+                              {formatStateLabel(wf.remediation_state || "NOT_STARTED")}
+                            </span>
+                            <span className="text-[10px] text-slate-500">
+                              {remediationActionCount} action{remediationActionCount === 1 ? "" : "s"}
+                            </span>
+                            {typeof wf.retry_count === "number" && wf.retry_count > 0 && (
+                              <span className="text-[10px] text-amber-400">
+                                {wf.retry_count} retr{wf.retry_count === 1 ? "y" : "ies"}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </button>
                     );
                   })}
                 </div>
@@ -662,7 +937,7 @@ export default function AgentPage() {
                 <Terminal className="w-4 h-4 text-indigo-400" />
                 Inspector Details Panel
               </div>
-              {selectedResult?.workflow_id && (
+              {(isWorkflowResult(selectedResult) || isRagResult(selectedResult)) && (
                 <button
                   onClick={() => setShowRawJson(!showRawJson)}
                   className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider rounded border border-slate-800 bg-[#0c0c12] hover:bg-slate-800/80 text-slate-400 hover:text-slate-200 transition cursor-pointer"
@@ -672,7 +947,76 @@ export default function AgentPage() {
               )}
             </div>
             
-            {selectedResult && selectedResult.workflow_id && !showRawJson ? (
+            {isRagResult(selectedResult) && !showRawJson ? (
+              <div className="space-y-4 text-xs max-h-[450px] overflow-y-auto pr-1">
+                <div className="p-3.5 rounded-xl border border-slate-800 bg-[#0c0c12]/40 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">RAG Corpus</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border ${
+                      selectedResult.grounded
+                        ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                        : "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                    }`}>
+                      {selectedResult.grounded ? "Grounded" : "Insufficient Evidence"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5 pt-1 text-[11px]">
+                    <div>
+                      <p className="text-slate-550 text-[9px] font-bold">VERSION</p>
+                      <p className="font-semibold text-slate-350">{selectedResult.corpus_version || "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-550 text-[9px] font-bold">CITATIONS</p>
+                      <p className="font-semibold text-slate-350">{selectedResult.citations?.length || 0}</p>
+                    </div>
+                  </div>
+                  {selectedResult.corpus_checksum && (
+                    <p className="font-mono text-[9px] text-slate-550 truncate">{selectedResult.corpus_checksum}</p>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Citations</div>
+                  {(!selectedResult.citations || selectedResult.citations.length === 0) ? (
+                    <div className="text-slate-500 italic p-3 rounded-xl border border-slate-850 bg-[#07070a] text-center">No matching corpus evidence was retrieved.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {(selectedResult.citations as RAGCitation[]).map((citation) => (
+                        <a
+                          key={`${citation.id}-${citation.url}`}
+                          href={citation.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block p-3 rounded-xl border border-slate-800 bg-[#07070a] hover:border-indigo-500/50 transition"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="font-mono text-slate-200 font-bold">{citation.id}</p>
+                              <p className="text-slate-350 text-[11px] leading-relaxed">{citation.label}</p>
+                              <p className="text-slate-550 text-[10px] truncate">{citation.source_name}</p>
+                            </div>
+                            <ExternalLink className="h-3.5 w-3.5 flex-shrink-0 text-slate-500" />
+                          </div>
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Retrieved Evidence</div>
+                  {(selectedResult.retrieved_chunks as RAGChunk[] | undefined)?.map((chunk) => (
+                    <div key={`${chunk.id}-${chunk.section_id}`} className="p-3 rounded-xl border border-slate-800 bg-[#07070a] space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-[10px] font-bold text-slate-250">{chunk.id}</span>
+                        <span className="text-[9px] font-bold text-indigo-400">{chunk.score?.toFixed ? chunk.score.toFixed(2) : chunk.score}</span>
+                      </div>
+                      <p className="text-slate-350 text-[11px] leading-relaxed">{chunk.text}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : isWorkflowResult(selectedResult) && !showRawJson ? (
               <div className="space-y-4 text-xs max-h-[450px] overflow-y-auto pr-1">
                 {/* Scan Summary */}
                 <div className="p-3.5 rounded-xl border border-slate-800 bg-[#0c0c12]/40 space-y-2">
@@ -695,8 +1039,8 @@ export default function AgentPage() {
                     </div>
                     <div>
                       <p className="text-slate-550 text-[9px] font-bold">RISK SCORE</p>
-                      <p className={`font-semibold ${selectedResult.risk_score > 0.5 ? "text-red-400" : "text-emerald-400"}`}>
-                        {selectedResult.risk_score !== null ? `${(selectedResult.risk_score * 100).toFixed(0)}%` : "N/A"}
+                      <p className={`font-semibold ${(selectedResult.risk_score ?? 0) > 0.5 ? "text-red-400" : "text-emerald-400"}`}>
+                        {selectedResult.risk_score != null ? `${(selectedResult.risk_score * 100).toFixed(0)}%` : "N/A"}
                       </p>
                     </div>
                     <div>
@@ -721,7 +1065,7 @@ export default function AgentPage() {
                     <div className="text-slate-500 italic p-3 rounded-xl border border-slate-850 bg-[#07070a] text-center">No compliance violations found.</div>
                   ) : (
                     <div className="space-y-2">
-                      {selectedResult.findings.map((finding: any, idx: number) => (
+                      {selectedResult.findings.map((finding: Finding, idx: number) => (
                         <div key={idx} className="p-3 rounded-xl border border-slate-800 bg-[#07070a] space-y-1.5">
                           <div className="flex justify-between items-center">
                             <span className="font-mono text-slate-200 font-bold">{finding.control}</span>
@@ -750,7 +1094,7 @@ export default function AgentPage() {
                     <div className="text-slate-500 italic p-3 rounded-xl border border-slate-850 bg-[#07070a] text-center">No remediation actions needed.</div>
                   ) : (
                     <div className="space-y-2">
-                      {selectedResult.remediation_plan.map((plan: any, idx: number) => (
+                      {selectedResult.remediation_plan.map((plan: RemediationPlan, idx: number) => (
                         <div key={idx} className="p-3 rounded-xl border border-slate-800 bg-[#07070a] space-y-2">
                           <div className="flex justify-between items-center">
                             <span className="font-bold text-slate-300">{plan.action}</span>
@@ -776,47 +1120,18 @@ export default function AgentPage() {
                   )}
                 </div>
 
-                {/* Execution History */}
+                {/* Remediation Timeline */}
                 <div className="space-y-2">
-                  <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Execution History</div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Remediation Timeline</div>
                   <div className="p-3 rounded-xl border border-slate-800 bg-[#07070a] space-y-2.5">
-                    {selectedResult.execution_result && selectedResult.execution_result.details ? (
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center text-[10px] border-b border-slate-850 pb-1.5">
-                          <span className="text-slate-500">Remediation Executed</span>
-                          <span className="text-emerald-400 font-bold">
-                            {selectedResult.execution_result.actions_successful}/{selectedResult.execution_result.actions_executed} Successful
-                          </span>
-                        </div>
-                        {selectedResult.execution_result.details.map((det: any, idx: number) => (
-                          <div key={idx} className="text-[10px] space-y-1">
-                            <div className="flex justify-between">
-                              <span className="font-bold text-slate-300">{det.connector} - {det.control}</span>
-                              <span className={det.status === "success" ? "text-emerald-400 animate-pulse" : "text-red-400"}>
-                                {det.status}
-                              </span>
-                            </div>
-                            <p className="text-slate-500 font-mono text-[9px]">{det.details}</p>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="space-y-2 text-[10px] text-slate-400">
-                        <p>• Initial scan completed.</p>
-                        {selectedResult.approval_id ? (
-                          <p className="text-amber-400 animate-pulse">• Awaiting approval (Linked Approval ID: {selectedResult.approval_id})</p>
-                        ) : (
-                          <p>• No remediation has been applied yet.</p>
-                        )}
-                      </div>
-                    )}
+                    <RemediationTimeline workflow={selectedResult} />
                   </div>
                 </div>
 
                 {/* Apply Remediation Button (Explicit Workflow ID) */}
-                {selectedResult.execution_status === "COMPLETED" && selectedResult.current_state === "COMPLETE" && selectedResult.remediation_plan?.length > 0 && (
+                {selectedResult.execution_status === "COMPLETED" && selectedResult.current_state === "COMPLETE" && (selectedResult.remediation_plan?.length ?? 0) > 0 && (
                   <button
-                    onClick={() => handleRemediate(selectedResult.workflow_id)}
+                    onClick={() => handleRemediate(selectedResult.workflow_id || "")}
                     disabled={remediating}
                     className="w-full py-2 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg transition active:scale-[0.98] disabled:opacity-50 mt-4 flex items-center justify-center gap-1.5 cursor-pointer"
                   >

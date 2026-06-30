@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  MessageSquare,
   ScrollText,
   Settings,
   ShieldAlert,
@@ -28,6 +29,7 @@ interface ConsoleShellProps {
 
 const navigation = [
   { name: "Overview", href: "/overview", icon: LayoutDashboard, roles: ["owner", "admin", "viewer"] },
+  { name: "Agent", href: "/agent", icon: MessageSquare, roles: ["owner", "admin", "viewer"] },
   { name: "Connect App", href: "/connect", icon: Cable, roles: ["owner", "admin"] },
   { name: "Gateway", href: "/gateway", icon: Cpu, roles: ["owner", "admin"] },
   { name: "Policies", href: "/policies", icon: ShieldAlert, roles: ["owner", "admin"] },

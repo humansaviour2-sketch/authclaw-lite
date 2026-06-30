@@ -1,10 +1,28 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/segmentio/kafka-go"
 )
+
+type fakeKafkaWriter struct {
+	messages []kafka.Message
+	err      error
+}
+
+func (w *fakeKafkaWriter) WriteMessages(_ context.Context, messages ...kafka.Message) error {
+	w.messages = append(w.messages, messages...)
+	return w.err
+}
+
+func (w *fakeKafkaWriter) Close() error {
+	return nil
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // AuditEvent serialisation & field tests
@@ -69,6 +87,60 @@ func TestPublishAuditEvent_WithoutKafka(t *testing.T) {
 	// Should not panic or return an error.
 	if err := PublishAuditEvent(event); err != nil {
 		t.Errorf("Expected nil error when kafkaWriter is nil, got: %v", err)
+	}
+}
+
+func TestPublishAuditEvent_UsesTenantKeyAndHeaders(t *testing.T) {
+	original := kafkaWriter
+	writer := &fakeKafkaWriter{}
+	kafkaWriter = writer
+	defer func() { kafkaWriter = original }()
+
+	event := &AuditEvent{
+		ID:        "evt-123",
+		RequestID: "req-123",
+		TenantID:  "tenant-abc",
+		Timestamp: time.Now(),
+		Action:    "allow",
+	}
+
+	if err := PublishAuditEvent(event); err != nil {
+		t.Fatalf("PublishAuditEvent returned error: %v", err)
+	}
+	if len(writer.messages) != 1 {
+		t.Fatalf("expected 1 Kafka message, got %d", len(writer.messages))
+	}
+	message := writer.messages[0]
+	if string(message.Key) != "tenant-abc" {
+		t.Fatalf("expected tenant key, got %q", string(message.Key))
+	}
+	headers := map[string]string{}
+	for _, header := range message.Headers {
+		headers[header.Key] = string(header.Value)
+	}
+	if headers["event_id"] != "evt-123" {
+		t.Fatalf("expected event_id header, got %q", headers["event_id"])
+	}
+	if headers["request_id"] != "req-123" {
+		t.Fatalf("expected request_id header, got %q", headers["request_id"])
+	}
+}
+
+func TestPublishAuditEvent_IncrementsFailureMetric(t *testing.T) {
+	original := kafkaWriter
+	writer := &fakeKafkaWriter{err: errors.New("broker unavailable")}
+	kafkaWriter = writer
+	before := kafkaPublishFailures.Load()
+	defer func() { kafkaWriter = original }()
+
+	event := &AuditEvent{ID: "evt-fail", TenantID: "tenant-abc", Timestamp: time.Now()}
+
+	if err := PublishAuditEvent(event); err != nil {
+		t.Fatalf("PublishAuditEvent returned serialization error: %v", err)
+	}
+
+	if kafkaPublishFailures.Load() != before+1 {
+		t.Fatalf("expected publish failure metric to increment")
 	}
 }
 

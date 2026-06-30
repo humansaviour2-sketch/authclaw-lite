@@ -23,8 +23,12 @@ from app.orchestrator.graph import (
     generate_remediation_plan,
     awaiting_approval,
     execute_remediation,
+    rollback_remediation,
     verify_results,
+    RemediationActionStatus,
+    RemediationState,
 )
+from app.orchestrator import runner as workflow_runner
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -234,6 +238,135 @@ class TestRecovery:
 # ──────────────────────────────────────────────────────────────────────────────
 # Test 4: Tenant isolation
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestRemediationRollback:
+    """Remediation tracks action state and rolls back after terminal failure."""
+
+    def test_failed_remediation_rolls_back_successful_actions(self, monkeypatch):
+        from app.orchestrator import connectors
+
+        state = _make_initial_state(framework="HIPAA", auto_approve=True)
+        state.update({
+            "current_state": WorkflowState.EXECUTE_REMEDIATION.value,
+            "remediation_plan": [
+                {
+                    "finding_control": "tenant/doc-success.txt",
+                    "action": "Simulate successful remediation",
+                    "priority": "high",
+                },
+                {
+                    "finding_control": "tenant/doc-fail.txt",
+                    "action": "Simulate failed remediation",
+                    "priority": "high",
+                },
+            ],
+        })
+
+        def fake_simulate_remediation(_scanner, object_key, action):
+            if object_key.endswith("doc-fail.txt"):
+                raise RuntimeError("redaction write failed")
+            return {
+                "connector": "S3Document",
+                "control": object_key,
+                "status": "success",
+                "details": f"Simulated remediation: {action}",
+            }
+
+        monkeypatch.setattr(
+            connectors.DocumentScanner,
+            "simulate_remediation",
+            fake_simulate_remediation,
+        )
+
+        state = execute_remediation(state)
+        assert state["current_state"] == WorkflowState.VERIFY_RESULTS.value
+        assert state["remediation_state"] == RemediationState.PARTIAL_FAILED.value
+        assert state["execution_result"]["actions_successful"] == 1
+        assert state["execution_result"]["actions_failed"] == 1
+        audit_actions = [event["action"] for event in state["_audit_calls"]]
+        assert "remediation_action_started" in audit_actions
+        assert "remediation_action_succeeded" in audit_actions
+        assert "remediation_action_failed" in audit_actions
+
+        while state["current_state"] != WorkflowState.ROLLBACK_REMEDIATION.value:
+            state = verify_results(state)
+            if state["current_state"] == WorkflowState.EXECUTE_REMEDIATION.value:
+                state = execute_remediation(state)
+
+        assert state["retry_count"] == 3
+        state = rollback_remediation(state)
+
+        assert state["current_state"] == WorkflowState.FAILED.value
+        assert state["execution_status"] == ExecutionStatus.FAILED.value
+        assert state["remediation_state"] == RemediationState.ROLLED_BACK.value
+        assert state["rollback_result"]["rollback_successful"] == 1
+        audit_actions = [event["action"] for event in state["_audit_calls"]]
+        assert "remediation_action_rollback_started" in audit_actions
+        assert "remediation_action_rolled_back" in audit_actions
+
+        statuses = {
+            action["finding_control"]: action["status"]
+            for action in state["remediation_actions"]
+        }
+        assert statuses["tenant/doc-success.txt"] == RemediationActionStatus.ROLLED_BACK.value
+        assert statuses["tenant/doc-fail.txt"] == RemediationActionStatus.FAILED.value
+
+    def test_action_audit_extra_trace_reaches_kafka_payload(self, monkeypatch):
+        sent_events = []
+
+        class DummyFuture:
+            def get(self, timeout):
+                return None
+
+        class DummyProducer:
+            def send(self, topic, key=None, value=None):
+                sent_events.append({"topic": topic, "key": key, "value": value})
+                return DummyFuture()
+
+        monkeypatch.setattr(workflow_runner, "_kafka_producer", DummyProducer())
+        monkeypatch.setattr(workflow_runner, "_init_kafka_producer", lambda: None)
+
+        workflow_runner.emit_audit_event(
+            workflow_id="workflow-123",
+            tenant_id="tenant-123",
+            request_id="request-123",
+            transition="REMEDIATION_ACTION_FAILED",
+            action="remediation_action_failed",
+            status="failed",
+            extra_trace=[
+                "action_id=action-123",
+                "control=tenant/doc.txt",
+                "attempt=3",
+                "error=write failed",
+            ],
+        )
+
+        assert len(sent_events) == 1
+        event = sent_events[0]["value"]
+        assert sent_events[0]["topic"] == "audit.events"
+        assert sent_events[0]["key"] == "tenant-123"
+        assert event["action"] == "workflow:remediation_action_failed"
+        assert "workflow_id=workflow-123" in event["execution_trace"]
+        assert "transition=REMEDIATION_ACTION_FAILED" in event["execution_trace"]
+        assert "action_id=action-123" in event["execution_trace"]
+        assert "control=tenant/doc.txt" in event["execution_trace"]
+
+        workflow_runner.emit_audit_event(
+            workflow_id="workflow-123",
+            tenant_id="tenant-123",
+            request_id="request-123",
+            transition="REMEDIATION_ACTION_FAILED",
+            action="remediation_action_failed",
+            status="failed",
+            extra_trace=[
+                "action_id=action-123",
+                "control=tenant/doc.txt",
+                "attempt=3",
+                "error=write failed",
+            ],
+        )
+        assert sent_events[1]["value"]["id"] == event["id"]
 
 
 class TestTenantIsolation:

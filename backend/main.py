@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.startup_checks import validate_production_environment
+from app.core.crypto import secret_management_status
 
 validate_production_environment()
 
@@ -46,8 +47,11 @@ from app.api.v1.endpoints.workflows import router as workflows_router
 from app.api.v1.endpoints.users import router as users_router
 from app.api.v1.endpoints.apikeys import router as apikeys_router
 from app.api.v1.endpoints.provider_credentials import router as provider_credentials_router
+from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.onboarding import router as onboarding_router
 from app.api.v1.endpoints.chat import router as chat_router
+from app.api.v1.endpoints.rag import router as rag_router
+from app.api.v1.endpoints.ephemeral_workers import router as ephemeral_workers_router
 from app.api.v1.endpoints.aws import router as aws_router
 from app.api.v1.endpoints.usage_limits import router as usage_limits_router
 # Phase 16 — Evidence Repository
@@ -64,8 +68,11 @@ app.include_router(workflows_router, prefix="/v1/workflows", tags=["workflows"])
 app.include_router(users_router, prefix="/v1/users", tags=["users"])
 app.include_router(apikeys_router, prefix="/v1/api-keys", tags=["api-keys"])
 app.include_router(provider_credentials_router, prefix="/v1/provider-credentials", tags=["provider-credentials"])
+app.include_router(auth_router, prefix="/v1/auth", tags=["auth"])
 app.include_router(onboarding_router, prefix="/v1/onboarding", tags=["onboarding"])
 app.include_router(chat_router, prefix="/v1/chat", tags=["chat"])
+app.include_router(rag_router, prefix="/v1/rag", tags=["rag"])
+app.include_router(ephemeral_workers_router, prefix="/v1/ephemeral-workers", tags=["ephemeral-workers"])
 app.include_router(usage_limits_router, prefix="/v1/usage-limits", tags=["usage-limits"])
 # Phase 14 — AWS Connector (gated behind AWS_ENABLED env flag at handler level)
 app.include_router(aws_router, prefix="/v1/aws", tags=["aws"])
@@ -79,7 +86,11 @@ app.include_router(findings_router, prefix="/v1/findings", tags=["findings"])
 @app.get("/health")
 def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "service": "authclaw-backend"}
+    return {
+        "status": "healthy",
+        "service": "authclaw-backend",
+        "secret_management": secret_management_status(),
+    }
 
 
 @app.on_event("startup")

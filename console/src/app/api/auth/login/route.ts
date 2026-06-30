@@ -89,10 +89,10 @@ export async function POST(request: Request) {
     });
 
     return response;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Login API Error:", error);
     return NextResponse.json(
-      { message: `Internal server error during login: ${error.message}` },
+      { message: `Internal server error during login: ${(error instanceof Error ? error.message : "Request failed")}` },
       { status: 500 }
     );
   }

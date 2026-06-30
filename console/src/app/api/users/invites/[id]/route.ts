@@ -6,7 +6,7 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
     const { id } = await params;
     await backendFetch(`/v1/users/invites/${id}`, { method: "DELETE" });
     return new NextResponse(null, { status: 204 });
-  } catch (error: any) {
+  } catch (error: unknown) {
     return handleApiError(error);
   }
 }

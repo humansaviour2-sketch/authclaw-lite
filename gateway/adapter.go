@@ -40,6 +40,15 @@ type GeminiRequest struct {
 	Contents []GeminiContent `json:"contents"`
 }
 
+func extractAzureDeploymentModel(path string) string {
+	parts := strings.Split(path, "/deployments/")
+	if len(parts) <= 1 {
+		return ""
+	}
+	subParts := strings.Split(parts[1], "/")
+	return subParts[0]
+}
+
 func extractGeminiModel(path string) string {
 	parts := strings.Split(path, "/models/")
 	if len(parts) > 1 {
@@ -56,7 +65,7 @@ type NormalizedRequest struct {
 	Prompts  []string // Extracted text content to redact/evaluate
 }
 
-// ExtractAndNormalize parses the request body and returns a NormalizedRequest 
+// ExtractAndNormalize parses the request body and returns a NormalizedRequest
 // and a helper function to rebuild the request body with modified prompts
 func ExtractAndNormalize(r *http.Request, provider string) (*NormalizedRequest, func([]string) ([]byte, error), error) {
 	// Read original body
@@ -72,12 +81,15 @@ func ExtractAndNormalize(r *http.Request, provider string) (*NormalizedRequest, 
 	}
 
 	switch provider {
-	case "openai":
+	case "openai", "azure_openai":
 		var openAIReq OpenAIRequest
 		if err := json.Unmarshal(bodyBytes, &openAIReq); err != nil {
 			return nil, nil, err
 		}
 		normalized.Model = openAIReq.Model
+		if normalized.Model == "" && provider == "azure_openai" {
+			normalized.Model = extractAzureDeploymentModel(r.URL.Path)
+		}
 		for _, msg := range openAIReq.Messages {
 			normalized.Prompts = append(normalized.Prompts, msg.Content)
 		}
@@ -118,6 +130,89 @@ func ExtractAndNormalize(r *http.Request, provider string) (*NormalizedRequest, 
 				}
 			}
 			return json.Marshal(anthropicReq)
+		}
+		return normalized, rebuilder, nil
+
+	case "cohere":
+		var cohereReq map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &cohereReq); err != nil {
+			return nil, nil, err
+		}
+		if model, ok := cohereReq["model"].(string); ok {
+			normalized.Model = model
+		}
+
+		type cohereTextRef struct {
+			container map[string]interface{}
+			key       string
+		}
+		refs := []cohereTextRef{}
+		appendStringRef := func(container map[string]interface{}, key string) {
+			if value, ok := container[key].(string); ok && value != "" {
+				normalized.Prompts = append(normalized.Prompts, value)
+				refs = append(refs, cohereTextRef{container: container, key: key})
+			}
+		}
+
+		if messages, ok := cohereReq["messages"].([]interface{}); ok {
+			for _, rawMessage := range messages {
+				message, ok := rawMessage.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				appendStringRef(message, "content")
+				if blocks, ok := message["content"].([]interface{}); ok {
+					for _, rawBlock := range blocks {
+						block, ok := rawBlock.(map[string]interface{})
+						if !ok {
+							continue
+						}
+						appendStringRef(block, "text")
+					}
+				}
+			}
+		}
+		appendStringRef(cohereReq, "message")
+		appendStringRef(cohereReq, "prompt")
+		if history, ok := cohereReq["chat_history"].([]interface{}); ok {
+			for _, rawItem := range history {
+				item, ok := rawItem.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				appendStringRef(item, "message")
+			}
+		}
+		if texts, ok := cohereReq["texts"].([]interface{}); ok {
+			for idx, rawText := range texts {
+				text, ok := rawText.(string)
+				if !ok || text == "" {
+					continue
+				}
+				normalized.Prompts = append(normalized.Prompts, text)
+				index := idx
+				refs = append(refs, cohereTextRef{
+					container: map[string]interface{}{"__texts_index": index},
+					key:       "texts",
+				})
+			}
+		}
+
+		rebuilder := func(newPrompts []string) ([]byte, error) {
+			for i, ref := range refs {
+				if i >= len(newPrompts) {
+					break
+				}
+				if ref.key == "texts" {
+					index, _ := ref.container["__texts_index"].(int)
+					if texts, ok := cohereReq["texts"].([]interface{}); ok && index < len(texts) {
+						texts[index] = newPrompts[i]
+					}
+					continue
+				}
+				ref.container[ref.key] = newPrompts[i]
+			}
+			return json.Marshal(cohereReq)
 		}
 		return normalized, rebuilder, nil
 

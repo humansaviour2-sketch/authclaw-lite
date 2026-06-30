@@ -50,6 +50,9 @@ class WorkflowResponse(BaseModel):
     risk_score: Optional[float] = None
     findings: Optional[list] = None
     remediation_plan: Optional[list] = None
+    remediation_state: Optional[str] = None
+    remediation_actions: Optional[list] = None
+    rollback_result: Optional[dict] = None
     approval_status: Optional[str] = None
     approval_id: Optional[str] = None
     execution_result: Optional[dict] = None
@@ -615,6 +618,9 @@ def remediate_workflow(
     state_data.update({
         "current_state": "AWAITING_APPROVAL",
         "execution_status": "PAUSED",
+        "remediation_state": "NOT_STARTED",
+        "remediation_actions": [],
+        "rollback_result": {},
         "approval_status": "PENDING",
         "approval_id": approval_id,
     })

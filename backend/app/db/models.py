@@ -1,5 +1,5 @@
 """SQLAlchemy ORM Models for AuthClaw"""
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from sqlalchemy import (
     Column, String, UUID, DateTime, Boolean, ForeignKey,
@@ -9,6 +9,10 @@ from app.db.base import Base
 from sqlalchemy.orm import relationship
 import uuid
 from sqlalchemy import UniqueConstraint, Enum
+
+
+def default_api_key_expiry():
+    return datetime.now(timezone.utc) + timedelta(days=90)
 
 
 class Tenant(Base):
@@ -30,6 +34,8 @@ class Tenant(Base):
     redaction_tokens = relationship("RedactionToken", back_populates="tenant", cascade="all, delete-orphan")
     workflows = relationship("ComplianceWorkflow", back_populates="tenant", cascade="all, delete-orphan")
     chat_sessions = relationship("ChatSession", back_populates="tenant", cascade="all, delete-orphan")
+    ephemeral_worker_tokens = relationship("EphemeralWorkerToken", back_populates="tenant", cascade="all, delete-orphan")
+    ephemeral_worker_runs = relationship("EphemeralWorkerRun", back_populates="tenant", cascade="all, delete-orphan")
     # Phase 16 — Evidence Repository
     evidence_records = relationship("EvidenceRecord", back_populates="tenant", cascade="all, delete-orphan")
     # Phase 17 — Findings Dashboard
@@ -88,7 +94,13 @@ class APIKey(Base):
     scopes = Column(ARRAY(String), nullable=False, default=["read"])  # read, write, admin
     is_active = Column(Boolean, default=True)
     last_used = Column(DateTime(timezone=True), nullable=True)
-    expires_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_ip = Column(String(64), nullable=True)
+    last_used_user_agent = Column(String(512), nullable=True)
+    last_used_request_id = Column(String(255), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False, default=default_api_key_expiry)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    rotated_at = Column(DateTime(timezone=True), nullable=True)
+    rotated_from_id = Column(UUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -137,6 +149,7 @@ class GatewayConfig(Base):
     endpoint = Column(String(512), nullable=False)
     model_whitelist = Column(ARRAY(String), nullable=True)  # If null, allow all models
     redaction_strategy = Column(String(50), nullable=False, default="mask")  # mask, hash, synthetic
+    redaction_token_retention_days = Column(Integer, nullable=False, default=90)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -166,6 +179,10 @@ class ProviderCredential(Base):
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     rotated_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    rotated_from_id = Column(UUID(as_uuid=True), ForeignKey("provider_credentials.id"), nullable=True)
+    version = Column(Integer, nullable=False, default=1)
 
     __table_args__ = (
         Index("idx_provider_credential_tenant", "tenant_id"),
@@ -240,14 +257,23 @@ class RedactionToken(Base):
     token_hash = Column(String(255), nullable=False)  # SHA-256 hash of token
     token_value = Column(String(255), nullable=False)  # Synthetic/masked value
     strategy = Column(String(50), nullable=False)  # mask, hash, synthetic
+    entity_type = Column(String(100), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    use_count = Column(Integer, nullable=False, default=0)
+    purged_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
     # Relationships
     tenant = relationship("Tenant", back_populates="redaction_tokens")
 
     __table_args__ = (
+        UniqueConstraint("tenant_id", "original_value", "strategy", name="uq_redaction_tokens_tenant_original_strategy"),
         Index("idx_redaction_tenant", "tenant_id"),
         Index("idx_redaction_hash", "token_hash"),
+        Index("idx_redaction_expires", "tenant_id", "expires_at"),
+        Index("idx_redaction_purged", "tenant_id", "purged_at"),
+        Index("idx_redaction_entity", "tenant_id", "entity_type"),
     )
 
 
@@ -308,6 +334,7 @@ class AuditLogMetadata(Base):
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
     record_id = Column(UUID(as_uuid=True), nullable=False, unique=True)  # Matches ClickHouse record_id
     actor_id = Column(UUID(as_uuid=True), nullable=True)
+    actor_type = Column(String(100), nullable=False, default="gateway")
     action = Column(String(255), nullable=False)
     request_id = Column(String(255), nullable=True)
     policy_id = Column(UUID(as_uuid=True), nullable=True)
@@ -319,6 +346,7 @@ class AuditLogMetadata(Base):
     response_status = Column(Integer, nullable=False, default=0)
     duration_ms = Column(Integer, nullable=False, default=0)
     frameworks_affected = Column(ARRAY(String), nullable=True)  # GDPR, HIPAA, SOC2
+    execution_trace = Column(Text, nullable=False, default="[]")
     prior_hash = Column(String(64), nullable=True)
     integrity_hash = Column(String(64), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
@@ -408,6 +436,52 @@ class ChatMessage(Base):
 # All tables below are new and additive. No existing model was modified.
 # =============================================================================
 
+class RAGCorpusVersion(Base):
+    """Versioned global regulatory corpus loaded from checked-in source files."""
+    __tablename__ = "rag_corpus_versions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    corpus_key = Column(String(120), nullable=False)
+    version = Column(String(80), nullable=False)
+    checksum = Column(String(64), nullable=False)
+    description = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    loaded_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    chunks = relationship("RAGCorpusChunk", back_populates="corpus_version", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("corpus_key", "version", name="uq_rag_corpus_version"),
+        Index("idx_rag_corpus_active", "corpus_key", "is_active"),
+    )
+
+
+class RAGCorpusChunk(Base):
+    """Searchable regulatory corpus chunk with citation metadata."""
+    __tablename__ = "rag_corpus_chunks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    corpus_version_id = Column(UUID(as_uuid=True), ForeignKey("rag_corpus_versions.id", ondelete="CASCADE"), nullable=False)
+    framework = Column(String(50), nullable=False)
+    section_id = Column(String(120), nullable=False)
+    title = Column(String(255), nullable=False)
+    citation_label = Column(String(255), nullable=False)
+    source_name = Column(String(255), nullable=False)
+    source_url = Column(Text, nullable=False)
+    chunk_text = Column(Text, nullable=False)
+    keywords = Column(ARRAY(String), nullable=False, default=list)
+    chunk_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    corpus_version = relationship("RAGCorpusVersion", back_populates="chunks")
+
+    __table_args__ = (
+        UniqueConstraint("corpus_version_id", "section_id", name="uq_rag_chunk_version_section"),
+        Index("idx_rag_chunk_framework", "framework"),
+        Index("idx_rag_chunk_hash", "chunk_hash"),
+    )
+
+
 class AWSUsageLimits(Base):
     """Per-tenant Bedrock daily usage counters and hard limits.
     
@@ -463,6 +537,73 @@ class AWSS3Document(Base):
         Index("idx_s3_docs_synced", "synced_at"),
         # Prevent duplicate keys per tenant+bucket
         UniqueConstraint("tenant_id", "bucket_name", "object_key", name="uq_s3_doc_tenant_key"),
+    )
+
+
+# =============================================================================
+# E2.5 - Ephemeral Workers
+# =============================================================================
+
+class EphemeralWorkerToken(Base):
+    """Short-lived, scoped token issued to a scan/remediation worker."""
+    __tablename__ = "ephemeral_worker_tokens"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    workflow_id = Column(String(255), nullable=True)
+    action_id = Column(String(255), nullable=False)
+    connector = Column(String(50), nullable=False)
+    purpose = Column(String(50), nullable=False)
+    scopes = Column(ARRAY(String), nullable=False, default=list)
+    permission_boundary = Column(JSON, nullable=False, default=dict)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    token_prefix = Column(String(32), nullable=False)
+    status = Column(String(50), nullable=False, default="active")
+    issued_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    issued_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_action = Column(String(255), nullable=True)
+    use_count = Column(Integer, nullable=False, default=0)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+
+    tenant = relationship("Tenant", back_populates="ephemeral_worker_tokens")
+    runs = relationship("EphemeralWorkerRun", back_populates="worker_token", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_ephemeral_worker_token_tenant", "tenant_id"),
+        Index("idx_ephemeral_worker_token_status", "tenant_id", "status", "expires_at"),
+        Index("idx_ephemeral_worker_token_workflow", "tenant_id", "workflow_id"),
+        Index("idx_ephemeral_worker_token_prefix", "token_prefix"),
+    )
+
+
+class EphemeralWorkerRun(Base):
+    """Auditable authorization decision for one worker action attempt."""
+    __tablename__ = "ephemeral_worker_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    worker_token_id = Column(UUID(as_uuid=True), ForeignKey("ephemeral_worker_tokens.id"), nullable=True)
+    connector = Column(String(50), nullable=False)
+    action = Column(String(255), nullable=False)
+    required_scope = Column(String(255), nullable=False)
+    destructive = Column(Boolean, nullable=False, default=False)
+    status = Column(String(50), nullable=False)
+    reason = Column(Text, nullable=False)
+    started_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+
+    tenant = relationship("Tenant", back_populates="ephemeral_worker_runs")
+    worker_token = relationship("EphemeralWorkerToken", back_populates="runs")
+
+    __table_args__ = (
+        Index("idx_ephemeral_worker_run_tenant", "tenant_id", "started_at"),
+        Index("idx_ephemeral_worker_run_token", "worker_token_id"),
+        Index("idx_ephemeral_worker_run_status", "tenant_id", "status"),
+        Index("idx_ephemeral_worker_run_connector", "tenant_id", "connector"),
     )
 
 

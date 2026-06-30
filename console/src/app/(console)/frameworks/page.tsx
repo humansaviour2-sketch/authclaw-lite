@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { 
   Award, 
   ShieldCheck, 
@@ -10,12 +10,11 @@ import {
   CheckCircle2,
   XCircle,
   AlertCircle,
-  ExternalLink,
   ChevronRight,
-  RefreshCw,
-  Clock,
-  Briefcase
+  RefreshCw
 } from "lucide-react";
+
+type FrameworkId = "soc2" | "gdpr" | "hipaa";
 
 interface DashboardMetrics {
   openApprovals: number;
@@ -37,11 +36,11 @@ export default function FrameworksPage() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeFramework, setActiveFramework] = useState<"soc2" | "gdpr" | "hipaa">("soc2");
+  const [activeFramework, setActiveFramework] = useState<FrameworkId>("soc2");
   const [exporting, setExporting] = useState(false);
   const [exportSuccess, setExportSuccess] = useState(false);
 
-  const fetchMetrics = async () => {
+  const fetchMetrics = useCallback(async () => {
     try {
       const res = await fetch("/api/dashboard");
       if (res.status === 401) {
@@ -52,17 +51,21 @@ export default function FrameworksPage() {
       const data = await res.json();
       setMetrics(data);
       setError(null);
-    } catch (err: any) {
-      console.warn("Frameworks fetchMetrics failed:", err.message);
-      setError(err.message || "Failed to load compliance evidence data");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to load compliance evidence data";
+      console.warn("Frameworks fetchMetrics failed:", message);
+      setError(message);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchMetrics();
-  }, []);
+    const timer = window.setTimeout(() => {
+      void fetchMetrics();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchMetrics]);
 
   const handleExport = () => {
     setExporting(true);
@@ -176,7 +179,7 @@ export default function FrameworksPage() {
     }
   };
 
-  const getFrameworkScore = (fw: "soc2" | "gdpr" | "hipaa") => {
+  const getFrameworkScore = (fw: FrameworkId) => {
     switch (fw) {
       case "soc2": return 85;
       case "gdpr": return 100;
@@ -215,17 +218,17 @@ export default function FrameworksPage() {
 
       {/* Framework Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {[
+        {([
           { id: "soc2", name: "SOC 2 Type II", desc: "Security, Availability & Confidentiality Trust Services Criteria." },
           { id: "gdpr", name: "GDPR", desc: "European Union regulation on data protection and privacy." },
           { id: "hipaa", name: "HIPAA Security Rule", desc: "US standards protecting electronic protected health info (ePHI)." }
-        ].map((fw) => {
-          const score = getFrameworkScore(fw.id as any);
+        ] satisfies Array<{ id: FrameworkId; name: string; desc: string }>).map((fw) => {
+          const score = getFrameworkScore(fw.id);
           const active = activeFramework === fw.id;
           return (
             <button
               key={fw.id}
-              onClick={() => setActiveFramework(fw.id as any)}
+              onClick={() => setActiveFramework(fw.id)}
               className={`text-left relative overflow-hidden rounded-2xl border p-6 shadow-xl transition group ${
                 active 
                   ? "bg-indigo-950/15 border-indigo-500/50" 

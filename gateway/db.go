@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -34,5 +35,12 @@ func InitDB() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	log.Println("Database connection established successfully.")
+	maxOpenConns := envInt("GATEWAY_DB_MAX_OPEN_CONNS", 25)
+	maxIdleConns := envInt("GATEWAY_DB_MAX_IDLE_CONNS", 10)
+	connMaxLifetimeSeconds := envInt("GATEWAY_DB_CONN_MAX_LIFETIME_SECONDS", 300)
+	DB.SetMaxOpenConns(maxOpenConns)
+	DB.SetMaxIdleConns(maxIdleConns)
+	DB.SetConnMaxLifetime(time.Duration(connMaxLifetimeSeconds) * time.Second)
+
+	log.Printf("Database connection established successfully. pool_max_open=%d pool_max_idle=%d conn_max_lifetime_seconds=%d", maxOpenConns, maxIdleConns, connMaxLifetimeSeconds)
 }

@@ -8,19 +8,12 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
-  FileSearch,
   ShieldAlert,
-  FileCheck,
-  FileWarning,
-  Link2,
-  Clock,
   Filter,
   ExternalLink,
   ChevronDown,
   AlertCircle,
   CheckCircle2,
-  Info,
-  DatabaseZap,
   TrendingUp,
 } from "lucide-react";
 import Link from "next/link";
@@ -389,7 +382,7 @@ export default function FindingsDashboard() {
       if (!res.ok) throw new Error("Failed to fetch dashboard summary");
       const data = await res.json();
       setSummary(data);
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error(e);
     }
   }, []);
@@ -412,16 +405,19 @@ export default function FindingsDashboard() {
       const data: FindingListResponse = await res.json();
       setFindings(data.items);
       setTotal(data.total);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to load findings");
     } finally {
       setLoading(false);
     }
   }, [page, pageSize, framework, findingType, severity, status]);
 
   useEffect(() => {
-    fetchFindings();
-    fetchSummary();
+    const timer = window.setTimeout(() => {
+      void fetchFindings();
+      void fetchSummary();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [fetchFindings, fetchSummary]);
 
   const handleStatusChange = async (findingId: string, newStatus: string) => {
@@ -438,7 +434,7 @@ export default function FindingsDashboard() {
         setSelectedFinding(updated);
       }
       fetchSummary();
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error(e);
     }
   };

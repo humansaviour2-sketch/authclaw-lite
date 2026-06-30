@@ -24,6 +24,7 @@ from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.db.models import EvidenceRecord, EvidenceLink
+from app.services import event_backbone
 
 logger = logging.getLogger("services.evidence")
 
@@ -59,7 +60,13 @@ def _init_kafka_producer():
 def _emit_evidence_audit(evidence_id: str, tenant_id: str, framework: str) -> None:
     """Emit an EVIDENCE_CREATED Kafka audit event. Never raises."""
     event = {
-        "id": str(uuid.uuid4()),
+        "id": event_backbone.stable_event_id(
+            event_type="evidence",
+            tenant_id=tenant_id,
+            subject_id=evidence_id,
+            action=f"EVIDENCE_CREATED:{framework}",
+            trace=[f"evidence_id={evidence_id}"],
+        ),
         "request_id": "",
         "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         "tenant_id": tenant_id,
@@ -79,9 +86,10 @@ def _emit_evidence_audit(evidence_id: str, tenant_id: str, framework: str) -> No
     _init_kafka_producer()
     if _kafka_producer:
         try:
-            future = _kafka_producer.send("audit.events", key=tenant_id, value=event)
+            future = _kafka_producer.send(event_backbone.AUDIT_EVENTS_TOPIC, key=event_backbone.tenant_key(tenant_id), value=event)
             future.get(timeout=5)
         except Exception as exc:
+            event_backbone.increment_metric("backend_audit_publish_failures_total")
             logger.warning("Failed to emit EVIDENCE_CREATED audit event to Kafka: %s", exc)
 
     logger.info(
