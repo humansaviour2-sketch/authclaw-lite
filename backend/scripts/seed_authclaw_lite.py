@@ -115,17 +115,18 @@ def main() -> None:
         conn.execute(
             text("""
             INSERT INTO gateway_configs (
-                id, tenant_id, name, provider, endpoint, model_whitelist, redaction_strategy, is_active
+                id, tenant_id, name, provider, endpoint, model_whitelist, redaction_strategy, redaction_token_retention_days, is_active
             )
             VALUES (
                 :id, :tenant_id, 'Demo Gemini Route', 'gemini',
                 'https://generativelanguage.googleapis.com',
-                ARRAY['gemini-2.5-flash-lite'], 'mask', true
+                ARRAY['gemini-2.5-flash-lite'], 'mask', 90, true
             )
             ON CONFLICT (id) DO UPDATE SET
                 endpoint = EXCLUDED.endpoint,
                 model_whitelist = EXCLUDED.model_whitelist,
                 redaction_strategy = EXCLUDED.redaction_strategy,
+                redaction_token_retention_days = EXCLUDED.redaction_token_retention_days,
                 is_active = true,
                 updated_at = NOW()
             """),

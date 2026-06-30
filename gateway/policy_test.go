@@ -422,6 +422,18 @@ func TestProxyIntegrationWithPolicy(t *testing.T) {
 	apiKey := "authclaw_proxy_policy_key_1"
 	keyHash := HashKey(apiKey)
 	_, _ = DB.Exec("INSERT INTO api_keys (id, tenant_id, key_hash, name, scopes, is_active, created_by) VALUES (gen_random_uuid(), $1, $2, 'Proxy Policy Key', $3, true, $4)", tenantID, keyHash, pq.Array([]string{"read"}), userID)
+	encryptedProviderKey, err := EncryptSecret("sk-test-provider")
+	if err != nil {
+		t.Fatalf("Failed to encrypt provider key: %v", err)
+	}
+	_, _ = DB.Exec(
+		`INSERT INTO provider_credentials (
+			id, tenant_id, provider, display_name, endpoint, encrypted_secret, auth_scheme, status, created_by, version
+		) VALUES (
+			gen_random_uuid(), $1, 'openai', 'Policy OpenAI', $2, $3, 'api_key', 'active', $4, 1
+		)`,
+		tenantID, targetServer.URL, encryptedProviderKey, userID,
+	)
 
 	// Point config to mock server
 	_, _ = DB.Exec("DELETE FROM gateway_configs WHERE tenant_id = $1", tenantID)

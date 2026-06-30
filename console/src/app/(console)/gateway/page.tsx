@@ -20,6 +20,7 @@ interface GatewayRoute {
   provider: string;
   endpoint: string;
   redaction_strategy: string;
+  redaction_token_retention_days: number;
   model_whitelist?: string[];
   is_active: boolean;
   created_at: string;
@@ -59,6 +60,7 @@ export default function GatewayPage() {
   const [provider, setProvider] = useState("openai");
   const [endpoint, setEndpoint] = useState("");
   const [redactionStrategy, setRedactionStrategy] = useState("mask");
+  const [retentionDays, setRetentionDays] = useState(90);
   const [whitelistInput, setWhitelistInput] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -120,6 +122,7 @@ export default function GatewayPage() {
     setProvider("openai");
     setEndpoint("https://api.openai.com/v1/chat/completions");
     setRedactionStrategy("mask");
+    setRetentionDays(90);
     setWhitelistInput("gpt-4o, gpt-4-turbo, gpt-3.5-turbo");
     setFormError(null);
     setModalMode("add");
@@ -132,6 +135,7 @@ export default function GatewayPage() {
     setProvider(route.provider);
     setEndpoint(route.endpoint);
     setRedactionStrategy(route.redaction_strategy);
+    setRetentionDays(route.redaction_token_retention_days || 90);
     setWhitelistInput(route.model_whitelist ? route.model_whitelist.join(", ") : "");
     setFormError(null);
     setModalMode("edit");
@@ -176,6 +180,7 @@ export default function GatewayPage() {
       provider,
       endpoint,
       redaction_strategy: redactionStrategy,
+      redaction_token_retention_days: retentionDays,
       model_whitelist,
     };
 
@@ -343,6 +348,13 @@ export default function GatewayPage() {
                         <div className="flex items-center gap-1.5 mt-1">
                           <EyeOff className="w-3.5 h-3.5 text-emerald-400" />
                           <span className="font-semibold text-slate-200 capitalize">{route.redaction_strategy} Strategy</span>
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-slate-500 text-[10px]">TOKEN RETENTION</p>
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                          <span className="font-semibold text-slate-200">{route.redaction_token_retention_days || 90} days</span>
                         </div>
                       </div>
                       {route.model_whitelist && route.model_whitelist.length > 0 && (
@@ -531,6 +543,23 @@ export default function GatewayPage() {
                     <option value="synthetic">Synthetic replacement</option>
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                  Token Retention
+                </label>
+                <select
+                  value={retentionDays}
+                  onChange={(e) => setRetentionDays(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded-lg bg-[#07070a] border border-slate-800 text-slate-200 text-xs focus:outline-none focus:border-indigo-500/80 transition"
+                >
+                  <option value={30}>30 days</option>
+                  <option value={90}>90 days</option>
+                  <option value={180}>180 days</option>
+                  <option value={365}>365 days</option>
+                  <option value={730}>730 days</option>
+                </select>
               </div>
 
               <div>

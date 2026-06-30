@@ -147,6 +147,7 @@ class GatewayConfig(Base):
     endpoint = Column(String(512), nullable=False)
     model_whitelist = Column(ARRAY(String), nullable=True)  # If null, allow all models
     redaction_strategy = Column(String(50), nullable=False, default="mask")  # mask, hash, synthetic
+    redaction_token_retention_days = Column(Integer, nullable=False, default=90)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -254,6 +255,11 @@ class RedactionToken(Base):
     token_hash = Column(String(255), nullable=False)  # SHA-256 hash of token
     token_value = Column(String(255), nullable=False)  # Synthetic/masked value
     strategy = Column(String(50), nullable=False)  # mask, hash, synthetic
+    entity_type = Column(String(100), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    use_count = Column(Integer, nullable=False, default=0)
+    purged_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
     # Relationships
@@ -263,6 +269,9 @@ class RedactionToken(Base):
         UniqueConstraint("tenant_id", "original_value", "strategy", name="uq_redaction_tokens_tenant_original_strategy"),
         Index("idx_redaction_tenant", "tenant_id"),
         Index("idx_redaction_hash", "token_hash"),
+        Index("idx_redaction_expires", "tenant_id", "expires_at"),
+        Index("idx_redaction_purged", "tenant_id", "purged_at"),
+        Index("idx_redaction_entity", "tenant_id", "entity_type"),
     )
 
 

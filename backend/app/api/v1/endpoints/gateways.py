@@ -38,6 +38,7 @@ def register_gateway(
             endpoint=gateway_in.endpoint,
             model_whitelist=gateway_in.model_whitelist,
             redaction_strategy=gateway_in.redaction_strategy,
+            redaction_token_retention_days=gateway_in.redaction_token_retention_days,
             is_active=True
         )
         db.add(gateway)
@@ -99,6 +100,7 @@ def update_gateway(
     gateway.endpoint = gateway_in.endpoint
     gateway.model_whitelist = gateway_in.model_whitelist
     gateway.redaction_strategy = gateway_in.redaction_strategy
+    gateway.redaction_token_retention_days = gateway_in.redaction_token_retention_days
     db.commit()
     db.refresh(gateway)
     return gateway

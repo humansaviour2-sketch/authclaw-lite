@@ -488,15 +488,32 @@ func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
-		if len(tokenMap) == 0 {
+		if len(tokenMap) == 0 && tenantID == "" {
 			return nil
 		}
 
 		contentType := resp.Header.Get("Content-Type")
 		if strings.Contains(contentType, "text/event-stream") {
-			resp.Body = NewStreamingReversalReader(resp.Body, tokenMap, provider)
+			resp.Body = NewStreamingProtectionReader(r.Context(), resp.Body, tokenMap, provider, tenantID, customRules, GetRedactionRuntimeConfig(r.Context(), tenantID))
 		} else {
-			resp.Body = NewStaticReversalReader(resp.Body, tokenMap)
+			body, readErr := io.ReadAll(resp.Body)
+			if closeErr := resp.Body.Close(); closeErr != nil && readErr == nil {
+				readErr = closeErr
+			}
+			if readErr != nil {
+				return readErr
+			}
+			protectedBody, _, protectErr := ProtectProviderResponseBody(r.Context(), tenantID, provider, body, tokenMap, customRules, GetRedactionRuntimeConfig(r.Context(), tenantID))
+			if protectErr != nil {
+				return protectErr
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(protectedBody))
+			resp.ContentLength = int64(len(protectedBody))
+			resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(protectedBody)))
+			resp.Header.Del("Content-Encoding")
+			return nil
+		}
+		if len(tokenMap) > 0 {
 			resp.ContentLength = -1
 			resp.Header.Del("Content-Length")
 		}

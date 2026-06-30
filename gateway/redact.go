@@ -22,6 +22,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -62,6 +64,19 @@ type AnalyzeResult struct {
 	Score      float64 `json:"score"`
 }
 
+type CustomNERRecognizerConfig struct {
+	Name            string   `json:"name"`
+	EntityType      string   `json:"entity_type"`
+	Patterns        []string `json:"patterns"`
+	ContextKeywords []string `json:"context_keywords,omitempty"`
+	Score           float64  `json:"score,omitempty"`
+}
+
+type RedactionRuntimeConfig struct {
+	Strategy           string
+	TokenRetentionDays int
+}
+
 func NewPresidioClient() *PresidioClient {
 	url := os.Getenv("PRESIDIO_URL")
 	if url == "" {
@@ -78,6 +93,21 @@ var presidioClientHTTP = &http.Client{
 	},
 	Timeout: 10 * time.Second,
 }
+
+var (
+	presidioLimiterOnce sync.Once
+	presidioLimiter     chan struct{}
+
+	redactionAnalyzeRequestsTotal  atomic.Uint64
+	redactionPresidioSuccessTotal  atomic.Uint64
+	redactionPresidioFallbackTotal atomic.Uint64
+	redactionPresidioTimeoutTotal  atomic.Uint64
+	redactionPresidioSlowTotal     atomic.Uint64
+	redactionEntitiesTotal         atomic.Uint64
+	redactionTokensCreatedTotal    atomic.Uint64
+	redactionTokensReusedTotal     atomic.Uint64
+	redactionTokensPurgedTotal     atomic.Uint64
+)
 
 func envDurationMillis(name string, fallback time.Duration, min time.Duration, max time.Duration) time.Duration {
 	raw := strings.TrimSpace(os.Getenv(name))
@@ -99,11 +129,171 @@ func envDurationMillis(name string, fallback time.Duration, min time.Duration, m
 }
 
 func presidioAnalyzeTimeout() time.Duration {
-	return envDurationMillis("PRESIDIO_ANALYZE_TIMEOUT_MS", 750*time.Millisecond, 100*time.Millisecond, 10*time.Second)
+	return envDurationMillis("PRESIDIO_ANALYZE_TIMEOUT_MS", 750*time.Millisecond, 25*time.Millisecond, 10*time.Second)
 }
 
 func presidioSlowLogThreshold() time.Duration {
 	return envDurationMillis("PRESIDIO_SLOW_LOG_MS", 500*time.Millisecond, 100*time.Millisecond, 10*time.Second)
+}
+
+func envBoundedInt(name string, fallback, min, max int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func presidioMaxConcurrency() int {
+	return envBoundedInt("PRESIDIO_MAX_CONCURRENCY", 10, 1, 200)
+}
+
+func presidioAcquireTimeout() time.Duration {
+	return envDurationMillis("PRESIDIO_ACQUIRE_TIMEOUT_MS", 100*time.Millisecond, 10*time.Millisecond, 5*time.Second)
+}
+
+func acquirePresidioSlot(ctx context.Context) (func(), bool) {
+	presidioLimiterOnce.Do(func() {
+		presidioLimiter = make(chan struct{}, presidioMaxConcurrency())
+	})
+	timer := time.NewTimer(presidioAcquireTimeout())
+	defer timer.Stop()
+	select {
+	case presidioLimiter <- struct{}{}:
+		return func() { <-presidioLimiter }, true
+	case <-timer.C:
+		return nil, false
+	case <-ctx.Done():
+		return nil, false
+	}
+}
+
+func RedactionMetricsSnapshot() map[string]uint64 {
+	return map[string]uint64{
+		"authclaw_gateway_redaction_analyze_requests_total":  redactionAnalyzeRequestsTotal.Load(),
+		"authclaw_gateway_redaction_presidio_success_total":  redactionPresidioSuccessTotal.Load(),
+		"authclaw_gateway_redaction_presidio_fallback_total": redactionPresidioFallbackTotal.Load(),
+		"authclaw_gateway_redaction_presidio_timeout_total":  redactionPresidioTimeoutTotal.Load(),
+		"authclaw_gateway_redaction_presidio_slow_total":     redactionPresidioSlowTotal.Load(),
+		"authclaw_gateway_redaction_entities_total":          redactionEntitiesTotal.Load(),
+		"authclaw_gateway_redaction_tokens_created_total":    redactionTokensCreatedTotal.Load(),
+		"authclaw_gateway_redaction_tokens_reused_total":     redactionTokensReusedTotal.Load(),
+		"authclaw_gateway_redaction_tokens_purged_total":     redactionTokensPurgedTotal.Load(),
+	}
+}
+
+func redactionHashSalt() string {
+	if salt := os.Getenv("REDACTION_HASH_SALT"); strings.TrimSpace(salt) != "" {
+		return salt
+	}
+	return "authclaw_redaction_salt_v1"
+}
+
+func loadCustomNERRecognizers() []CustomNERRecognizerConfig {
+	payload := strings.TrimSpace(os.Getenv("REDACTION_CUSTOM_RECOGNIZERS_JSON"))
+	if path := strings.TrimSpace(os.Getenv("REDACTION_CUSTOM_RECOGNIZERS_FILE")); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			payload = strings.TrimSpace(string(data))
+		} else {
+			log.Printf("[REDACTION] custom_recognizers status=load_failed path=%s err=%v", path, err)
+		}
+	}
+	if payload == "" {
+		return nil
+	}
+
+	var recognizers []CustomNERRecognizerConfig
+	if err := json.Unmarshal([]byte(payload), &recognizers); err != nil {
+		var single CustomNERRecognizerConfig
+		if singleErr := json.Unmarshal([]byte(payload), &single); singleErr != nil {
+			log.Printf("[REDACTION] custom_recognizers status=parse_failed err=%v", err)
+			return nil
+		}
+		recognizers = []CustomNERRecognizerConfig{single}
+	}
+
+	cleaned := make([]CustomNERRecognizerConfig, 0, len(recognizers))
+	for _, recognizer := range recognizers {
+		recognizer.Name = strings.TrimSpace(recognizer.Name)
+		recognizer.EntityType = strings.ToUpper(strings.TrimSpace(recognizer.EntityType))
+		if recognizer.Name == "" {
+			recognizer.Name = recognizer.EntityType + "Recognizer"
+		}
+		if recognizer.EntityType == "" || len(recognizer.Patterns) == 0 {
+			continue
+		}
+		if recognizer.Score <= 0 || recognizer.Score > 1 {
+			recognizer.Score = 0.85
+		}
+		cleaned = append(cleaned, recognizer)
+	}
+	return cleaned
+}
+
+func customNERPresidioRecognizers() []PresidioRecognizer {
+	custom := loadCustomNERRecognizers()
+	recognizers := make([]PresidioRecognizer, 0, len(custom))
+	for _, item := range custom {
+		patterns := make([]PresidioPattern, 0, len(item.Patterns))
+		for i, pattern := range item.Patterns {
+			pattern = strings.TrimSpace(pattern)
+			if pattern == "" {
+				continue
+			}
+			patterns = append(patterns, PresidioPattern{
+				Name:  fmt.Sprintf("%s_%d", item.Name, i+1),
+				Regex: pattern,
+				Score: item.Score,
+			})
+		}
+		if len(patterns) == 0 {
+			continue
+		}
+		recognizers = append(recognizers, PresidioRecognizer{
+			Name:              item.Name,
+			SupportedLanguage: "en",
+			Patterns:          patterns,
+			SupportedEntity:   item.EntityType,
+		})
+	}
+	return recognizers
+}
+
+func appendCustomNERAnalyzeResults(results []AnalyzeResult, text string) []AnalyzeResult {
+	for _, recognizer := range loadCustomNERRecognizers() {
+		if len(recognizer.ContextKeywords) > 0 {
+			lowerText := strings.ToLower(text)
+			matchedContext := false
+			for _, keyword := range recognizer.ContextKeywords {
+				if strings.Contains(lowerText, strings.ToLower(strings.TrimSpace(keyword))) {
+					matchedContext = true
+					break
+				}
+			}
+			if !matchedContext {
+				continue
+			}
+		}
+		for _, patternText := range recognizer.Patterns {
+			pattern, err := regexp.Compile(patternText)
+			if err != nil {
+				log.Printf("[REDACTION] custom_recognizer=%s status=invalid_regex err=%v", recognizer.Name, err)
+				continue
+			}
+			results = appendRegexAnalyzeResults(results, text, recognizer.EntityType, pattern)
+		}
+	}
+	return results
 }
 
 func (c *PresidioClient) Analyze(ctx context.Context, text string, customRules []RegexRule) ([]AnalyzeResult, error) {
@@ -205,6 +395,7 @@ func (c *PresidioClient) Analyze(ctx context.Context, text string, customRules [
 			SupportedEntity: strings.ToUpper(strings.ReplaceAll(rule.Name, " ", "_")),
 		})
 	}
+	recognizers = append(recognizers, customNERPresidioRecognizers()...)
 
 	reqBody := AnalyzeRequest{
 		Text:             text,
@@ -225,6 +416,9 @@ func (c *PresidioClient) Analyze(ctx context.Context, text string, customRules [
 
 	for _, rule := range customRules {
 		reqBody.Entities = append(reqBody.Entities, strings.ToUpper(strings.ReplaceAll(rule.Name, " ", "_")))
+	}
+	for _, recognizer := range loadCustomNERRecognizers() {
+		reqBody.Entities = append(reqBody.Entities, recognizer.EntityType)
 	}
 
 	jsonBytes, err := json.Marshal(reqBody)
@@ -259,6 +453,23 @@ func (c *PresidioClient) Analyze(ctx context.Context, text string, customRules [
 
 func analyzePromptWithFallback(ctx context.Context, presidio *PresidioClient, prompt string, customRules []RegexRule) []AnalyzeResult {
 	start := time.Now()
+	redactionAnalyzeRequestsTotal.Add(1)
+	release, acquired := acquirePresidioSlot(ctx)
+	if !acquired {
+		fallbackStart := time.Now()
+		results := fallbackAnalyze(prompt, customRules)
+		redactionPresidioFallbackTotal.Add(1)
+		redactionPresidioTimeoutTotal.Add(1)
+		log.Printf(
+			"[REDACTION] analyzer=presidio status=fallback reason=concurrency_limit fallback_duration_ms=%d prompt_chars=%d findings=%d",
+			time.Since(fallbackStart).Milliseconds(),
+			len([]rune(prompt)),
+			len(results),
+		)
+		return results
+	}
+	defer release()
+
 	analyzeCtx, cancel := context.WithTimeout(ctx, presidioAnalyzeTimeout())
 	defer cancel()
 
@@ -267,6 +478,10 @@ func analyzePromptWithFallback(ctx context.Context, presidio *PresidioClient, pr
 	if err != nil {
 		fallbackStart := time.Now()
 		results = fallbackAnalyze(prompt, customRules)
+		redactionPresidioFallbackTotal.Add(1)
+		if analyzeCtx.Err() != nil || strings.Contains(strings.ToLower(err.Error()), "timeout") || strings.Contains(strings.ToLower(err.Error()), "deadline") {
+			redactionPresidioTimeoutTotal.Add(1)
+		}
 		log.Printf(
 			"[REDACTION] analyzer=presidio status=fallback duration_ms=%d fallback_duration_ms=%d prompt_chars=%d err=%v",
 			duration.Milliseconds(),
@@ -278,7 +493,10 @@ func analyzePromptWithFallback(ctx context.Context, presidio *PresidioClient, pr
 	}
 
 	results = appendCustomRuleAnalyzeResults(results, prompt, customRules)
+	results = appendCustomNERAnalyzeResults(results, prompt)
+	redactionPresidioSuccessTotal.Add(1)
 	if duration > presidioSlowLogThreshold() {
+		redactionPresidioSlowTotal.Add(1)
 		log.Printf(
 			"[REDACTION] analyzer=presidio status=slow duration_ms=%d prompt_chars=%d findings=%d",
 			duration.Milliseconds(),
@@ -300,13 +518,19 @@ func byteIndexToRuneIndex(text string, byteIndex int) int {
 }
 
 func appendRegexAnalyzeResults(results []AnalyzeResult, text, entityType string, pattern *regexp.Regexp) []AnalyzeResult {
-	for _, loc := range pattern.FindAllStringIndex(text, -1) {
-		if len(loc) != 2 {
+	for _, loc := range pattern.FindAllStringSubmatchIndex(text, -1) {
+		startIndex := 0
+		endIndex := 1
+		if len(loc) >= 4 && loc[2] >= 0 && loc[3] >= 0 {
+			startIndex = 2
+			endIndex = 3
+		}
+		if loc[startIndex] < 0 || loc[endIndex] < 0 {
 			continue
 		}
 		results = append(results, AnalyzeResult{
-			Start:      byteIndexToRuneIndex(text, loc[0]),
-			End:        byteIndexToRuneIndex(text, loc[1]),
+			Start:      byteIndexToRuneIndex(text, loc[startIndex]),
+			End:        byteIndexToRuneIndex(text, loc[endIndex]),
 			EntityType: entityType,
 			Score:      1.0,
 		})
@@ -371,12 +595,14 @@ func fallbackAnalyze(text string, customRules []RegexRule) []AnalyzeResult {
 		{"US_SSN", regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`)},
 		{"PHONE_NUMBER", regexp.MustCompile(`(?i)(?:\+?\d[\d\s().-]{7,}\d)`)},
 		{"HEALTH_DATA", regexp.MustCompile(`(?i)\b(patient|diagnosed|treatment|prescription|symptoms|medical|disease|hospital|doctor|clinic)\b`)},
+		{"PERSON", regexp.MustCompile(`(?i)\b(?:my name is|name is|patient|manager|supervisor|reported to|managed by)\s*:?\s*([A-Z][a-z]+ [A-Z][a-z]+)\b`)},
 	}
 
 	for _, item := range builtIns {
 		results = appendRegexAnalyzeResults(results, text, item.entityType, item.pattern)
 	}
-	return appendCustomRuleAnalyzeResults(results, text, customRules)
+	results = appendCustomRuleAnalyzeResults(results, text, customRules)
+	return appendCustomNERAnalyzeResults(results, text)
 }
 
 // Encryption Helpers (AES-256 CBC Deterministic)
@@ -715,9 +941,12 @@ func GenerateTokenValue(ctx context.Context, tx *sql.Tx, tenantID, originalValue
 		return fmt.Sprintf("[REDACTED_%s_%s]", entityType, uuidPart), nil
 
 	case "hash":
-		salt := "authclaw_salt_2026"
 		h := sha256.New()
-		h.Write([]byte(originalValue + salt))
+		h.Write([]byte(tenantID))
+		h.Write([]byte(":"))
+		h.Write([]byte(originalValue))
+		h.Write([]byte(":"))
+		h.Write([]byte(redactionHashSalt()))
 		hashPart := hex.EncodeToString(h.Sum(nil))[:12]
 		return fmt.Sprintf("[HASH_%s_%s]", entityType, hashPart), nil
 
@@ -744,7 +973,32 @@ func GenerateTokenValue(ctx context.Context, tx *sql.Tx, tenantID, originalValue
 	}
 }
 
+func purgeExpiredRedactionTokens(ctx context.Context, tx *sql.Tx, tenantID string) (int64, error) {
+	result, err := tx.ExecContext(ctx,
+		"DELETE FROM redaction_tokens WHERE tenant_id = $1 AND expires_at IS NOT NULL AND expires_at <= NOW()",
+		tenantID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func retentionDaysOrDefault(days int) int {
+	if days <= 0 {
+		return 90
+	}
+	if days > 3650 {
+		return 3650
+	}
+	return days
+}
+
 func GetOrCreateRedactionToken(ctx context.Context, tenantID, originalValue, entityType, strategy string) (string, error) {
+	return GetOrCreateRedactionTokenWithRetention(ctx, tenantID, originalValue, entityType, strategy, 90)
+}
+
+func GetOrCreateRedactionTokenWithRetention(ctx context.Context, tenantID, originalValue, entityType, strategy string, retentionDays int) (string, error) {
 	encVal, err := EncryptDeterministic(originalValue)
 	if err != nil {
 		return "", err
@@ -761,25 +1015,54 @@ func GetOrCreateRedactionToken(ctx context.Context, tenantID, originalValue, ent
 	var tokenVal string
 
 	err = RunInTenantTx(ctx, tenantID, func(tx *sql.Tx) error {
+		purged, purgeErr := purgeExpiredRedactionTokens(ctx, tx, tenantID)
+		if purgeErr != nil {
+			return purgeErr
+		}
+		if purged > 0 {
+			redactionTokensPurgedTotal.Add(uint64(purged))
+		}
+
 		var tokenID string
 		err := tx.QueryRowContext(ctx,
-			"SELECT id::text, token_value FROM redaction_tokens WHERE tenant_id = $1 AND original_value = $2 AND strategy = $3 LIMIT 1",
+			`SELECT id::text, token_value
+			 FROM redaction_tokens
+			 WHERE tenant_id = $1
+			   AND original_value = $2
+			   AND strategy = $3
+			   AND (expires_at IS NULL OR expires_at > NOW())
+			 LIMIT 1`,
 			tenantID, encVal, strategy,
 		).Scan(&tokenID, &tokenVal)
 
 		if err == nil {
+			redactionTokensReusedTotal.Add(1)
 			if shouldRelabelToken(tokenVal) {
 				tokenVal, err = GenerateTokenValue(ctx, tx, tenantID, originalValue, entityType, strategy)
 				if err != nil {
 					return err
 				}
 				_, err = tx.ExecContext(ctx,
-					"UPDATE redaction_tokens SET token_value = $1, token_hash = $2 WHERE tenant_id = $3 AND id = $4::uuid",
-					tokenVal, hashToken(tokenVal), tenantID, tokenID,
+					`UPDATE redaction_tokens
+					 SET token_value = $1,
+					     token_hash = $2,
+					     entity_type = $5,
+					     last_used_at = NOW(),
+					     use_count = use_count + 1
+					 WHERE tenant_id = $3 AND id = $4::uuid`,
+					tokenVal, hashToken(tokenVal), tenantID, tokenID, entityType,
 				)
 				return err
 			}
-			return nil
+			_, err = tx.ExecContext(ctx,
+				`UPDATE redaction_tokens
+				 SET entity_type = COALESCE(entity_type, $3),
+				     last_used_at = NOW(),
+				     use_count = use_count + 1
+				 WHERE tenant_id = $1 AND id = $2::uuid`,
+				tenantID, tokenID, entityType,
+			)
+			return err
 		}
 		if err != sql.ErrNoRows {
 			return err
@@ -794,15 +1077,22 @@ func GetOrCreateRedactionToken(ctx context.Context, tenantID, originalValue, ent
 
 		err = tx.QueryRowContext(ctx, `
 			INSERT INTO redaction_tokens (
-				id, tenant_id, original_value, token_hash, token_value, strategy, created_at
+				id, tenant_id, original_value, token_hash, token_value, strategy, entity_type, expires_at, last_used_at, use_count, created_at
 			)
-			VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NOW())
+			VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, NOW() + ($7::text || ' days')::interval, NOW(), 1, NOW())
 			ON CONFLICT (tenant_id, original_value, strategy)
-			DO UPDATE SET token_value = redaction_tokens.token_value
+			DO UPDATE SET
+				token_value = redaction_tokens.token_value,
+				entity_type = COALESCE(redaction_tokens.entity_type, EXCLUDED.entity_type),
+				last_used_at = NOW(),
+				use_count = redaction_tokens.use_count + 1
 			RETURNING token_value
 		`,
-			tenantID, encVal, tokenHash, tokenVal, strategy,
+			tenantID, encVal, tokenHash, tokenVal, strategy, entityType, retentionDaysOrDefault(retentionDays),
 		).Scan(&tokenVal)
+		if err == nil {
+			redactionTokensCreatedTotal.Add(1)
+		}
 		return err
 	})
 
@@ -813,63 +1103,88 @@ func GetOrCreateRedactionToken(ctx context.Context, tenantID, originalValue, ent
 }
 
 func GetRedactionStrategy(ctx context.Context, tenantID string) string {
-	var strategy string
+	return GetRedactionRuntimeConfig(ctx, tenantID).Strategy
+}
+
+func GetRedactionRuntimeConfig(ctx context.Context, tenantID string) RedactionRuntimeConfig {
+	config := RedactionRuntimeConfig{Strategy: "mask", TokenRetentionDays: 90}
 	err := RunInTenantTx(ctx, tenantID, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx,
-			"SELECT redaction_strategy FROM gateway_configs WHERE tenant_id = $1 AND is_active = true LIMIT 1",
+			`SELECT redaction_strategy, COALESCE(redaction_token_retention_days, 90)
+			 FROM gateway_configs
+			 WHERE tenant_id = $1 AND is_active = true
+			 ORDER BY updated_at DESC
+			 LIMIT 1`,
 			tenantID,
-		).Scan(&strategy)
+		).Scan(&config.Strategy, &config.TokenRetentionDays)
 	})
-	if err != nil || strategy == "" {
-		return "mask"
+	if err != nil || config.Strategy == "" {
+		config.Strategy = "mask"
 	}
-	return strategy
+	config.TokenRetentionDays = retentionDaysOrDefault(config.TokenRetentionDays)
+	return config
+}
+
+func redactTextWithResults(ctx context.Context, tenantID, text string, customRules []RegexRule, runtimeConfig RedactionRuntimeConfig, results []AnalyzeResult) (string, map[string]string, error) {
+	tokenMap := make(map[string]string)
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Start == results[j].Start {
+			return results[i].End > results[j].End
+		}
+		return results[i].Start > results[j].Start
+	})
+
+	runes := []rune(text)
+	lastProcessedStart := len(runes) + 1
+
+	for _, entity := range results {
+		if entity.Start < 0 || entity.End > len(runes) || entity.Start >= entity.End {
+			continue
+		}
+		if entity.End > lastProcessedStart {
+			continue
+		}
+
+		originalVal := string(runes[entity.Start:entity.End])
+		entityType := normalizeDetectedEntity(entity.EntityType, originalVal, customRules)
+		tokenVal, err := GetOrCreateRedactionTokenWithRetention(
+			ctx,
+			tenantID,
+			originalVal,
+			entityType,
+			runtimeConfig.Strategy,
+			runtimeConfig.TokenRetentionDays,
+		)
+		if err != nil {
+			return "", nil, err
+		}
+		redactionEntitiesTotal.Add(1)
+		tokenMap[tokenVal] = originalVal
+		runes = append(runes[:entity.Start], append([]rune(tokenVal), runes[entity.End:]...)...)
+		lastProcessedStart = entity.Start
+	}
+
+	return string(runes), tokenMap, nil
 }
 
 // RedactPrompts runs Presidio Analyzer and tokenizes original prompts
 func RedactPrompts(ctx context.Context, tenantID string, prompts []string, customRules []RegexRule) ([]string, map[string]string, error) {
 	presidio := NewPresidioClient()
-	strategy := GetRedactionStrategy(ctx, tenantID)
+	runtimeConfig := GetRedactionRuntimeConfig(ctx, tenantID)
 	tokenMap := make(map[string]string)
 	redactedPrompts := make([]string, len(prompts))
 
 	for i, prompt := range prompts {
 		results := analyzePromptWithFallback(ctx, presidio, prompt, customRules)
-
-		// Sort results descending by start index to prevent offset issues during replacements
-		sort.Slice(results, func(i, j int) bool {
-			// If starts are equal, process the longer one first (larger end)
-			if results[i].Start == results[j].Start {
-				return results[i].End > results[j].End
-			}
-			return results[i].Start > results[j].Start
-		})
-
-		runes := []rune(prompt)
-		lastProcessedStart := len(runes) + 1
-
-		for _, entity := range results {
-			if entity.Start < 0 || entity.End > len(runes) || entity.Start >= entity.End {
-				continue
-			}
-			// Skip if this entity overlaps with the previously processed (which is to the right of this one)
-			if entity.End > lastProcessedStart {
-				continue
-			}
-
-			originalVal := string(runes[entity.Start:entity.End])
-			entityType := normalizeDetectedEntity(entity.EntityType, originalVal, customRules)
-			tokenVal, err := GetOrCreateRedactionToken(ctx, tenantID, originalVal, entityType, strategy)
-			if err != nil {
-				return nil, nil, err
-			}
-			tokenMap[tokenVal] = originalVal
-
-			// Replace text segment
-			runes = append(runes[:entity.Start], append([]rune(tokenVal), runes[entity.End:]...)...)
-			lastProcessedStart = entity.Start
+		redacted, promptTokenMap, err := redactTextWithResults(ctx, tenantID, prompt, customRules, runtimeConfig, results)
+		if err != nil {
+			return nil, nil, err
 		}
-		redactedPrompts[i] = string(runes)
+		for token, original := range promptTokenMap {
+			tokenMap[token] = original
+		}
+		redactedPrompts[i] = redacted
 	}
 
 	return redactedPrompts, tokenMap, nil
@@ -882,6 +1197,43 @@ func ReverseStaticResponse(body []byte, tokenMap map[string]string) []byte {
 		bodyStr = strings.ReplaceAll(bodyStr, token, original)
 	}
 	return []byte(bodyStr)
+}
+
+func redactOutboundText(ctx context.Context, tenantID, text string, customRules []RegexRule, runtimeConfig RedactionRuntimeConfig) (string, map[string]string, error) {
+	results := fallbackAnalyze(text, customRules)
+	return redactTextWithResults(ctx, tenantID, text, customRules, runtimeConfig, results)
+}
+
+func ProtectProviderResponseBody(ctx context.Context, tenantID, provider string, body []byte, inboundTokenMap map[string]string, customRules []RegexRule, runtimeConfig RedactionRuntimeConfig) ([]byte, map[string]string, error) {
+	reversed := ReverseStaticResponse(body, inboundTokenMap)
+	outboundTokenMap := make(map[string]string)
+	if tenantID == "" {
+		return reversed, outboundTokenMap, nil
+	}
+	var transformErr error
+
+	modifiedJSON, ok, err := rewriteDeltaText(reversed, provider, func(text string) string {
+		redacted, textTokenMap, redactErr := redactOutboundText(ctx, tenantID, text, customRules, runtimeConfig)
+		if redactErr != nil {
+			transformErr = redactErr
+			return text
+		}
+		for token, original := range textTokenMap {
+			outboundTokenMap[token] = original
+		}
+		return redacted
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if transformErr != nil {
+		return nil, nil, transformErr
+	}
+	if ok {
+		return modifiedJSON, outboundTokenMap, nil
+	}
+
+	return reversed, outboundTokenMap, nil
 }
 
 // Streaming Reversal
@@ -927,6 +1279,65 @@ func (sr *StreamReverser) Flush() string {
 	out := sr.buffer
 	sr.buffer = ""
 	return out
+}
+
+type StreamOutboundRedactor struct {
+	tenantID      string
+	customRules   []RegexRule
+	runtimeConfig RedactionRuntimeConfig
+	buffer        string
+	tailRunes     int
+}
+
+func NewStreamOutboundRedactor(tenantID string, customRules []RegexRule, runtimeConfig RedactionRuntimeConfig) *StreamOutboundRedactor {
+	return &StreamOutboundRedactor{
+		tenantID:      tenantID,
+		customRules:   customRules,
+		runtimeConfig: runtimeConfig,
+		tailRunes:     envBoundedInt("REDACTION_STREAM_TAIL_RUNES", 128, 32, 2048),
+	}
+}
+
+func splitSafeRunePrefix(text string, tailRunes int) (string, string) {
+	runes := []rune(text)
+	if len(runes) <= tailRunes {
+		return "", text
+	}
+	return string(runes[:len(runes)-tailRunes]), string(runes[len(runes)-tailRunes:])
+}
+
+func (sr *StreamOutboundRedactor) ProcessChunk(ctx context.Context, chunk string) string {
+	if chunk == "" {
+		return ""
+	}
+	sr.buffer += chunk
+	safe, tail := splitSafeRunePrefix(sr.buffer, sr.tailRunes)
+	if safe == "" {
+		sr.buffer = tail
+		return ""
+	}
+	redacted, _, err := redactOutboundText(ctx, sr.tenantID, safe, sr.customRules, sr.runtimeConfig)
+	if err != nil {
+		log.Printf("[REDACTION] outbound_stream status=redact_failed err=%v", err)
+		sr.buffer = tail
+		return safe
+	}
+	sr.buffer = tail
+	return redacted
+}
+
+func (sr *StreamOutboundRedactor) Flush(ctx context.Context) string {
+	if sr.buffer == "" {
+		return ""
+	}
+	buffer := sr.buffer
+	sr.buffer = ""
+	redacted, _, err := redactOutboundText(ctx, sr.tenantID, buffer, sr.customRules, sr.runtimeConfig)
+	if err != nil {
+		log.Printf("[REDACTION] outbound_stream status=flush_failed err=%v", err)
+		return buffer
+	}
+	return redacted
 }
 
 type StaticReversalReader struct {
@@ -981,6 +1392,8 @@ type StreamingReversalReader struct {
 	originalBody  io.ReadCloser
 	scanner       *bufio.Scanner
 	reverser      *StreamReverser
+	outbound      *StreamOutboundRedactor
+	ctx           context.Context
 	provider      string
 	outBuffer     bytes.Buffer
 	lastSSEPrefix string
@@ -989,12 +1402,22 @@ type StreamingReversalReader struct {
 }
 
 func NewStreamingReversalReader(originalBody io.ReadCloser, tokenMap map[string]string, provider string) *StreamingReversalReader {
+	return NewStreamingProtectionReader(context.Background(), originalBody, tokenMap, provider, "", nil, RedactionRuntimeConfig{})
+}
+
+func NewStreamingProtectionReader(ctx context.Context, originalBody io.ReadCloser, tokenMap map[string]string, provider, tenantID string, customRules []RegexRule, runtimeConfig RedactionRuntimeConfig) *StreamingReversalReader {
 	scanner := bufio.NewScanner(originalBody)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	var outbound *StreamOutboundRedactor
+	if tenantID != "" {
+		outbound = NewStreamOutboundRedactor(tenantID, customRules, runtimeConfig)
+	}
 	return &StreamingReversalReader{
 		originalBody: originalBody,
 		scanner:      scanner,
 		reverser:     NewStreamReverser(tokenMap),
+		outbound:     outbound,
+		ctx:          ctx,
 		provider:     provider,
 	}
 }
@@ -1315,6 +1738,9 @@ func syntheticDeltaPayload(provider string, text string) []byte {
 
 func (s *StreamingReversalReader) flushPendingLines() []string {
 	flushedText := s.reverser.Flush()
+	if s.outbound != nil {
+		flushedText = s.outbound.ProcessChunk(s.ctx, flushedText) + s.outbound.Flush(s.ctx)
+	}
 	if flushedText == "" {
 		return nil
 	}
@@ -1335,7 +1761,11 @@ func (s *StreamingReversalReader) processLine(line string) []string {
 			return append(lines, line)
 		}
 		modifiedJSON, ok, err := rewriteDeltaText([]byte(payload), s.provider, func(text string) string {
-			return s.reverser.ProcessChunk(text)
+			processed := s.reverser.ProcessChunk(text)
+			if s.outbound != nil {
+				return s.outbound.ProcessChunk(s.ctx, processed)
+			}
+			return processed
 		})
 		if err != nil || !ok {
 			return []string{line}
@@ -1347,7 +1777,11 @@ func (s *StreamingReversalReader) processLine(line string) []string {
 
 	if strings.HasPrefix(strings.TrimSpace(line), "{") {
 		modifiedJSON, ok, err := rewriteDeltaText([]byte(line), s.provider, func(text string) string {
-			return s.reverser.ProcessChunk(text)
+			processed := s.reverser.ProcessChunk(text)
+			if s.outbound != nil {
+				return s.outbound.ProcessChunk(s.ctx, processed)
+			}
+			return processed
 		})
 		if err != nil || !ok {
 			return []string{line}

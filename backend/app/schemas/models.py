@@ -163,6 +163,7 @@ class GatewayConfigCreate(BaseModel):
     endpoint: str = Field(..., min_length=1, max_length=512)
     model_whitelist: Optional[List[str]] = None
     redaction_strategy: str = Field(default="mask", pattern="^(mask|hash|synthetic)$")
+    redaction_token_retention_days: int = Field(default=90, ge=1, le=3650)
 
 
 class GatewayConfigResponse(BaseModel):
@@ -172,6 +173,7 @@ class GatewayConfigResponse(BaseModel):
     provider: str
     endpoint: str
     redaction_strategy: str
+    redaction_token_retention_days: int = 90
     is_active: bool
     created_at: datetime
 
@@ -321,6 +323,11 @@ class RedactionTokenMapResponse(BaseModel):
     token_hash: str
     original_value: str
     strategy: str
+    entity_type: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    last_used_at: Optional[datetime] = None
+    use_count: int = 0
+    purged_at: Optional[datetime] = None
     created_at: datetime
 
     class Config:

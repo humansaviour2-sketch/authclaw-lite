@@ -523,6 +523,7 @@ def verify(payload: OnboardingVerifyRequest, request: Request):
             endpoint=DEFAULT_ENDPOINT,
             model_whitelist=[DEFAULT_MODEL],
             redaction_strategy="mask",
+            redaction_token_retention_days=90,
             is_active=True,
         )
         db.add(gateway)
