@@ -50,6 +50,7 @@ from app.api.v1.endpoints.provider_credentials import router as provider_credent
 from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.onboarding import router as onboarding_router
 from app.api.v1.endpoints.chat import router as chat_router
+from app.api.v1.endpoints.rag import router as rag_router
 from app.api.v1.endpoints.aws import router as aws_router
 from app.api.v1.endpoints.usage_limits import router as usage_limits_router
 # Phase 16 — Evidence Repository
@@ -69,6 +70,7 @@ app.include_router(provider_credentials_router, prefix="/v1/provider-credentials
 app.include_router(auth_router, prefix="/v1/auth", tags=["auth"])
 app.include_router(onboarding_router, prefix="/v1/onboarding", tags=["onboarding"])
 app.include_router(chat_router, prefix="/v1/chat", tags=["chat"])
+app.include_router(rag_router, prefix="/v1/rag", tags=["rag"])
 app.include_router(usage_limits_router, prefix="/v1/usage-limits", tags=["usage-limits"])
 # Phase 14 — AWS Connector (gated behind AWS_ENABLED env flag at handler level)
 app.include_router(aws_router, prefix="/v1/aws", tags=["aws"])

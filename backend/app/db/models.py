@@ -434,6 +434,52 @@ class ChatMessage(Base):
 # All tables below are new and additive. No existing model was modified.
 # =============================================================================
 
+class RAGCorpusVersion(Base):
+    """Versioned global regulatory corpus loaded from checked-in source files."""
+    __tablename__ = "rag_corpus_versions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    corpus_key = Column(String(120), nullable=False)
+    version = Column(String(80), nullable=False)
+    checksum = Column(String(64), nullable=False)
+    description = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    loaded_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    chunks = relationship("RAGCorpusChunk", back_populates="corpus_version", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("corpus_key", "version", name="uq_rag_corpus_version"),
+        Index("idx_rag_corpus_active", "corpus_key", "is_active"),
+    )
+
+
+class RAGCorpusChunk(Base):
+    """Searchable regulatory corpus chunk with citation metadata."""
+    __tablename__ = "rag_corpus_chunks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    corpus_version_id = Column(UUID(as_uuid=True), ForeignKey("rag_corpus_versions.id", ondelete="CASCADE"), nullable=False)
+    framework = Column(String(50), nullable=False)
+    section_id = Column(String(120), nullable=False)
+    title = Column(String(255), nullable=False)
+    citation_label = Column(String(255), nullable=False)
+    source_name = Column(String(255), nullable=False)
+    source_url = Column(Text, nullable=False)
+    chunk_text = Column(Text, nullable=False)
+    keywords = Column(ARRAY(String), nullable=False, default=list)
+    chunk_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    corpus_version = relationship("RAGCorpusVersion", back_populates="chunks")
+
+    __table_args__ = (
+        UniqueConstraint("corpus_version_id", "section_id", name="uq_rag_chunk_version_section"),
+        Index("idx_rag_chunk_framework", "framework"),
+        Index("idx_rag_chunk_hash", "chunk_hash"),
+    )
+
+
 class AWSUsageLimits(Base):
     """Per-tenant Bedrock daily usage counters and hard limits.
     

@@ -20,7 +20,9 @@ import {
   Terminal,
   Activity,
   Plus,
-  MessageSquare
+  MessageSquare,
+  ExternalLink,
+  BookOpen
 } from "lucide-react";
 
 interface Workflow {
@@ -59,6 +61,21 @@ interface Message {
   text: string;
   timestamp: Date;
   results?: any;
+}
+
+interface RAGCitation {
+  id: string;
+  framework: string;
+  section_id: string;
+  label: string;
+  title: string;
+  source_name: string;
+  url: string;
+  score: number;
+}
+
+interface RAGChunk extends RAGCitation {
+  text: string;
 }
 
 interface RemediationAction {
@@ -676,12 +693,33 @@ export default function AgentPage() {
                           : "bg-slate-850/40 border border-slate-800 text-slate-300 rounded-tl-none"
                       }`}>
                         <pre className="whitespace-pre-wrap font-sans">{msg.text}</pre>
+                        {msg.results?.type === "rag_answer" && msg.results.citations?.length > 0 && (
+                          <div className="mt-3 space-y-1.5">
+                            <div className="text-[9px] font-bold uppercase tracking-wider text-slate-500">Grounding Evidence</div>
+                            {msg.results.citations.slice(0, 3).map((citation: RAGCitation) => (
+                              <a
+                                key={`${citation.id}-${citation.url}`}
+                                href={citation.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex items-start gap-2 rounded-lg border border-slate-800 bg-[#07070a]/70 px-2 py-1.5 text-[10px] text-slate-350 hover:border-indigo-500/50 hover:text-indigo-300 transition"
+                              >
+                                <BookOpen className="mt-0.5 h-3 w-3 flex-shrink-0 text-indigo-400" />
+                                <span className="min-w-0 flex-1">
+                                  <span className="font-mono font-bold text-slate-200">{citation.id}</span>
+                                  <span className="block truncate">{citation.label}</span>
+                                </span>
+                                <ExternalLink className="mt-0.5 h-3 w-3 flex-shrink-0 text-slate-500" />
+                              </a>
+                            ))}
+                          </div>
+                        )}
                         {msg.results && (
                           <button
                             onClick={() => setSelectedResult(msg.results)}
                             className="mt-2 text-[10px] font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 underline transition cursor-pointer"
                           >
-                            View Results JSON
+                            {msg.results.type === "rag_answer" ? "View RAG Evidence" : "View Results JSON"}
                           </button>
                         )}
                       </div>
@@ -877,7 +915,7 @@ export default function AgentPage() {
                 <Terminal className="w-4 h-4 text-indigo-400" />
                 Inspector Details Panel
               </div>
-              {selectedResult?.workflow_id && (
+              {(selectedResult?.workflow_id || selectedResult?.type === "rag_answer") && (
                 <button
                   onClick={() => setShowRawJson(!showRawJson)}
                   className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider rounded border border-slate-800 bg-[#0c0c12] hover:bg-slate-800/80 text-slate-400 hover:text-slate-200 transition cursor-pointer"
@@ -887,7 +925,76 @@ export default function AgentPage() {
               )}
             </div>
             
-            {selectedResult && selectedResult.workflow_id && !showRawJson ? (
+            {selectedResult?.type === "rag_answer" && !showRawJson ? (
+              <div className="space-y-4 text-xs max-h-[450px] overflow-y-auto pr-1">
+                <div className="p-3.5 rounded-xl border border-slate-800 bg-[#0c0c12]/40 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">RAG Corpus</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border ${
+                      selectedResult.grounded
+                        ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                        : "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                    }`}>
+                      {selectedResult.grounded ? "Grounded" : "Insufficient Evidence"}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5 pt-1 text-[11px]">
+                    <div>
+                      <p className="text-slate-550 text-[9px] font-bold">VERSION</p>
+                      <p className="font-semibold text-slate-350">{selectedResult.corpus_version || "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-550 text-[9px] font-bold">CITATIONS</p>
+                      <p className="font-semibold text-slate-350">{selectedResult.citations?.length || 0}</p>
+                    </div>
+                  </div>
+                  {selectedResult.corpus_checksum && (
+                    <p className="font-mono text-[9px] text-slate-550 truncate">{selectedResult.corpus_checksum}</p>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Citations</div>
+                  {(!selectedResult.citations || selectedResult.citations.length === 0) ? (
+                    <div className="text-slate-500 italic p-3 rounded-xl border border-slate-850 bg-[#07070a] text-center">No matching corpus evidence was retrieved.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {(selectedResult.citations as RAGCitation[]).map((citation) => (
+                        <a
+                          key={`${citation.id}-${citation.url}`}
+                          href={citation.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block p-3 rounded-xl border border-slate-800 bg-[#07070a] hover:border-indigo-500/50 transition"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="font-mono text-slate-200 font-bold">{citation.id}</p>
+                              <p className="text-slate-350 text-[11px] leading-relaxed">{citation.label}</p>
+                              <p className="text-slate-550 text-[10px] truncate">{citation.source_name}</p>
+                            </div>
+                            <ExternalLink className="h-3.5 w-3.5 flex-shrink-0 text-slate-500" />
+                          </div>
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Retrieved Evidence</div>
+                  {(selectedResult.retrieved_chunks as RAGChunk[] | undefined)?.map((chunk) => (
+                    <div key={`${chunk.id}-${chunk.section_id}`} className="p-3 rounded-xl border border-slate-800 bg-[#07070a] space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-[10px] font-bold text-slate-250">{chunk.id}</span>
+                        <span className="text-[9px] font-bold text-indigo-400">{chunk.score?.toFixed ? chunk.score.toFixed(2) : chunk.score}</span>
+                      </div>
+                      <p className="text-slate-350 text-[11px] leading-relaxed">{chunk.text}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : selectedResult && selectedResult.workflow_id && !showRawJson ? (
               <div className="space-y-4 text-xs max-h-[450px] overflow-y-auto pr-1">
                 {/* Scan Summary */}
                 <div className="p-3.5 rounded-xl border border-slate-800 bg-[#0c0c12]/40 space-y-2">

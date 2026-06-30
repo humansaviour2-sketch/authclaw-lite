@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.auth import get_tenant_db, require_scopes
 from app.db.models import ChatMessage, ChatSession, ComplianceWorkflow
 from app.orchestrator.runner import ComplianceWorkflowRunner, _create_approval_in_db, emit_audit_event
+from app.rag import service as rag_service
 
 logger = logging.getLogger("api.chat")
 router = APIRouter()
@@ -273,6 +274,7 @@ def post_message(
         # Use the Authorization header forwarded from the frontend (raw API key Bearer token)
         # Fallback to a configured gateway key if the header is unavailable
         auth_header = request.headers.get("Authorization") or f"Bearer {os.getenv('GATEWAY_API_KEY', '')}"
+        rag_result = rag_service.answer_question(db, message_text)
 
         # Send ONLY the current user message — not the full history.
         # Gemini's stateless API doesn't benefit from history here and it
@@ -280,29 +282,46 @@ def post_message(
         contents = [
             {
                 "role": "user",
-                "parts": [{"text": message_text}]
+                "parts": [{"text": rag_result["prompt"]}]
             }
         ]
 
-        try:
-            res = requests.post(
-                f"{gateway_url}/v1/models/gemini-2.5-flash-lite:generateContent",
-                headers={
-                    "Authorization": auth_header,
-                    "Content-Type": "application/json"
-                },
-                json={"contents": contents},
-                timeout=30
-            )
-            if not res.ok:
-                logger.error("Gateway request failed: %s", res.text)
-                response_text = f"Gateway request failed: {res.text}"
-            else:
-                data = res.json()
-                response_text = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "No response from model.")
-        except Exception as exc:
-            logger.error("Failed to query Gemini: %s", exc)
-            response_text = f"Failed to communicate with AI Model: {str(exc)}"
+        if not rag_result["grounded"]:
+            response_text = rag_result["answer"]
+        else:
+            try:
+                res = requests.post(
+                    f"{gateway_url}/v1/models/gemini-2.5-flash-lite:generateContent",
+                    headers={
+                        "Authorization": auth_header,
+                        "Content-Type": "application/json"
+                    },
+                    json={"contents": contents},
+                    timeout=30
+                )
+                if not res.ok:
+                    logger.error("Gateway request failed: %s", res.text)
+                    response_text = rag_result["answer"]
+                else:
+                    data = res.json()
+                    model_answer = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                    response_text = model_answer or rag_result["answer"]
+                    citation_ids = [item["id"] for item in rag_result["citations"]]
+                    if citation_ids and not any(f"[{citation_id}]" in response_text for citation_id in citation_ids):
+                        response_text = f"{response_text.rstrip()}\n\nGrounding citations: " + ", ".join(f"[{item}]" for item in citation_ids[:3])
+            except Exception as exc:
+                logger.error("Failed to query Gemini: %s", exc)
+                response_text = rag_result["answer"]
+
+        results_payload = {
+            "type": "rag_answer",
+            "question": message_text,
+            "corpus_version": rag_result["corpus_version"],
+            "corpus_checksum": rag_result["corpus_checksum"],
+            "grounded": rag_result["grounded"],
+            "citations": rag_result["citations"],
+            "retrieved_chunks": rag_result["retrieved_chunks"],
+        }
 
     # Save agent response
     agent_msg = ChatMessage(
