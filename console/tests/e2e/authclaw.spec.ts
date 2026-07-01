@@ -15,6 +15,12 @@ test.describe('AuthClaw E2E Console Verification', () => {
     await page.waitForURL('/connect');
     await expect(page).toHaveURL(/.*connect/);
     await expect(page.locator('body')).toContainText('Connect Your AI App');
+    await expect
+      .poll(async () => {
+        const response = await page.request.get('/api/auth/session');
+        return response.status();
+      })
+      .toBe(200);
 
     await page.goto('/overview');
     await expect(page.locator('body')).toContainText('Overview');
