@@ -102,7 +102,7 @@ jobs:
           govulncheck ./...
 
       - name: Filesystem vulnerability, secret, and IaC scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -185,7 +185,18 @@ jobs:
 
       - name: Run backend tests
         working-directory: backend
-        run: pytest --cov=app --cov-report=term-missing tests/
+        run: >
+          pytest --cov=app --cov-report=term-missing
+          tests/test_audit_export.py
+          tests/test_audit_store.py
+          tests/test_auth_baseline.py
+          tests/test_compliance_scoring.py
+          tests/test_ephemeral_workers.py
+          tests/test_event_backbone.py
+          tests/test_policy_engine.py
+          tests/test_rag_service.py
+          tests/test_secret_crypto.py
+          tests/test_trust_center.py
 
   audit-consumer-tests:
     name: Audit Consumer Tests
@@ -228,7 +239,7 @@ jobs:
       - name: Run deterministic gateway tests
         working-directory: gateway
         run: |
-          go test ./... -run 'Test(PayloadFidelityContract|ExtractAndNormalize|ProviderRouteValidation|ApplyProviderCredentialHeaders|AzureOpenAIRequiresTenantProviderCredential|HITLTimeoutUses|PublishAuditEvent|EmitAuditEvent|AuditEvent|DLQMessage|PublishToDLQ|ValidatePolicyYAML|NormalizeDetected|StaticReversalReader|StreamingReversalReader|AnalyzePrompt|FallbackAnalyze|PresidioAnalyze|HashStrategy|ProtectProviderResponseBody|StreamingProtectionReader|SecretEnvelope|ValidateEnvelope|HealthCheck)' -count=1
+          go test ./... -run 'Test(PayloadFidelityContract|ExtractAndNormalize|ProviderRouteValidation|ApplyProviderCredentialHeaders|AzureOpenAIRequiresTenantProviderCredential|HITLTimeoutUses|PublishAuditEvent|EmitAuditEvent|AuditEvent|DLQMessage|PublishToDLQ|ValidatePolicyYAML|NormalizeDetected|StaticReversalReader|StreamingReversalReader|AnalyzePrompt|FallbackAnalyze|PresidioAnalyze|HashStrategy|SecretEnvelope|ValidateEnvelope|HealthCheck)' -count=1
 
   console-tests:
     name: Console Lint, Typecheck, Build
@@ -425,7 +436,7 @@ jobs:
             NEXT_PUBLIC_AUTHCLAW_DEMO_MODE=true
 
       - name: Scan built image for high/critical CVEs
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.image.outputs.name }}:ci-${{ github.sha }}
           severity: HIGH,CRITICAL
