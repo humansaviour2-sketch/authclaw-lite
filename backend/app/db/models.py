@@ -36,6 +36,8 @@ class Tenant(Base):
     chat_sessions = relationship("ChatSession", back_populates="tenant", cascade="all, delete-orphan")
     ephemeral_worker_tokens = relationship("EphemeralWorkerToken", back_populates="tenant", cascade="all, delete-orphan")
     ephemeral_worker_runs = relationship("EphemeralWorkerRun", back_populates="tenant", cascade="all, delete-orphan")
+    trust_center_shares = relationship("TrustCenterShare", back_populates="tenant", cascade="all, delete-orphan")
+    trust_center_access_logs = relationship("TrustCenterAccessLog", back_populates="tenant", cascade="all, delete-orphan")
     # Phase 16 — Evidence Repository
     evidence_records = relationship("EvidenceRecord", back_populates="tenant", cascade="all, delete-orphan")
     # Phase 17 — Findings Dashboard
@@ -776,4 +778,56 @@ class ComplianceScoreSnapshot(Base):
         Index("idx_compliance_score_tenant", "tenant_id"),
         Index("idx_compliance_score_framework", "tenant_id", "framework"),
         Index("idx_compliance_score_date", "tenant_id", "snapshot_date"),
+    )
+
+
+class TrustCenterShare(Base):
+    """Scoped public auditor share for the Trust Center."""
+    __tablename__ = "trust_center_shares"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    label = Column(String(255), nullable=False)
+    auditor_email = Column(String(255), nullable=True)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    token_prefix = Column(String(32), nullable=False)
+    frameworks = Column(ARRAY(String), nullable=False, default=list)
+    permissions = Column(ARRAY(String), nullable=False, default=list)
+    status = Column(String(50), nullable=False, default="active")
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    last_accessed_at = Column(DateTime(timezone=True), nullable=True)
+    access_count = Column(Integer, nullable=False, default=0)
+    metadata_json = Column(JSON, nullable=False, default=dict)
+
+    tenant = relationship("Tenant", back_populates="trust_center_shares")
+    access_logs = relationship("TrustCenterAccessLog", back_populates="share", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_trust_share_tenant", "tenant_id"),
+        Index("idx_trust_share_status", "tenant_id", "status", "expires_at"),
+        Index("idx_trust_share_prefix", "token_prefix"),
+    )
+
+
+class TrustCenterAccessLog(Base):
+    """Access audit for public Trust Center share usage."""
+    __tablename__ = "trust_center_access_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    share_id = Column(UUID(as_uuid=True), ForeignKey("trust_center_shares.id"), nullable=False)
+    action = Column(String(100), nullable=False)
+    accessed_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    ip_address = Column(String(64), nullable=True)
+    user_agent = Column(String(512), nullable=True)
+
+    tenant = relationship("Tenant", back_populates="trust_center_access_logs")
+    share = relationship("TrustCenterShare", back_populates="access_logs")
+
+    __table_args__ = (
+        Index("idx_trust_access_tenant", "tenant_id", "accessed_at"),
+        Index("idx_trust_access_share", "share_id"),
     )

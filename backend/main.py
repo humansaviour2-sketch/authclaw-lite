@@ -53,6 +53,7 @@ from app.api.v1.endpoints.chat import router as chat_router
 from app.api.v1.endpoints.rag import router as rag_router
 from app.api.v1.endpoints.ephemeral_workers import router as ephemeral_workers_router
 from app.api.v1.endpoints.compliance_scores import router as compliance_scores_router
+from app.api.v1.endpoints.trust_center import router as trust_center_router
 from app.api.v1.endpoints.aws import router as aws_router
 from app.api.v1.endpoints.usage_limits import router as usage_limits_router
 # Phase 16 — Evidence Repository
@@ -75,6 +76,7 @@ app.include_router(chat_router, prefix="/v1/chat", tags=["chat"])
 app.include_router(rag_router, prefix="/v1/rag", tags=["rag"])
 app.include_router(ephemeral_workers_router, prefix="/v1/ephemeral-workers", tags=["ephemeral-workers"])
 app.include_router(compliance_scores_router, prefix="/v1/compliance-scores", tags=["compliance-scores"])
+app.include_router(trust_center_router, prefix="/v1/trust-center", tags=["trust-center"])
 app.include_router(usage_limits_router, prefix="/v1/usage-limits", tags=["usage-limits"])
 # Phase 14 — AWS Connector (gated behind AWS_ENABLED env flag at handler level)
 app.include_router(aws_router, prefix="/v1/aws", tags=["aws"])

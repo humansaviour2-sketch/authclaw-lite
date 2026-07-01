@@ -7,7 +7,7 @@ export function middleware(request: NextRequest) {
   const demoBlockedPaths = ["/frameworks", "/evidence", "/findings", "/aws"];
   
   // 1. Define public and asset paths
-  const isPublicPath = path === "/login" || path === "/signup" || path.startsWith("/api/auth");
+  const isPublicPath = path === "/login" || path === "/signup" || path.startsWith("/trust-center") || path.startsWith("/api/auth");
   const isAssetPath =
     path.startsWith("/_next") ||
     path.startsWith("/favicon.ico") ||

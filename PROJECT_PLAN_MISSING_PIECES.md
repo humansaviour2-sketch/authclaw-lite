@@ -8,10 +8,10 @@ This checklist maps the project plan epics and exit criteria against the current
 
 ## Executive Summary
 
-AuthClaw now has meaningful coverage for the gateway, provider adapters, streaming redaction, HITL, remediation state machine with rollback, audit hash-chain, signed audit exports, ClickHouse audit analytics, Kafka event backbone, auth/API-key lifecycle, secret envelopes, Terraform baseline, regulatory RAG, ephemeral worker tokens, and multi-region RDS standby design. The remaining gaps are concentrated in five areas:
+AuthClaw now has meaningful coverage for the gateway, provider adapters, streaming redaction, HITL, remediation state machine with rollback, audit hash-chain, signed audit exports, ClickHouse audit analytics, Kafka event backbone, auth/API-key lifecycle, secret envelopes, Terraform baseline, regulatory RAG, ephemeral worker tokens, Auditor Trust Center sharing, compliance scoring, and multi-region RDS standby design. The remaining gaps are concentrated in five areas:
 
 1. Full external worker runtimes and cloud/SCM connector execution beyond the current AWS path.
-2. Auditor Trust Center workflow and broader compliance report packaging.
+2. Broader compliance report packaging and auditor-ready evidence bundles.
 3. CI/CD security gates and staging/prod promotion proof.
 4. Enterprise auth/SSO, full RBAC administration, and tenant administration polish.
 5. Phase 4 hardening: latency proof, red-team harness, pentest, HA drills, SOC 2 evidence automation.
@@ -32,6 +32,7 @@ AuthClaw now has meaningful coverage for the gateway, provider adapters, streami
 - Ephemeral worker baseline added with scoped short-lived worker tokens, TTL enforcement, deny-by-default connector permission boundaries, GitHub/GCP connector foundations, AWS S3 sync worker-token enforcement, audit-chain events for grants/use/denials/expiry/revocation, and a console worker-token lifecycle tab.
 - Cryptographic audit export added with Ed25519-signed export artifacts, SHA-256 payload digest, offline verifier CLI, tamper/chain-gap detection tests, backend export/verify endpoints, and console signed-export/verify controls.
 - Compliance dashboard scoring added with live SOC 2/GDPR/HIPAA readiness scores from evidence, findings, audit-chain events, redaction records, policies, gateways, and approvals; control-by-control explanations, score history snapshots, trend API, and console framework dashboard are present.
+- Auditor Trust Center added with scoped share links, token-hash storage, expiry/revocation, public auditor page, live framework scores, signed export downloads, export upload verifier, auditor verification guide, and access logging.
 
 ## Phase 1 - Foundation & Architecture
 
@@ -304,18 +305,20 @@ Missing pieces:
 
 ### E3.5 Audit Explorer + Trust Center
 
-Current status: Partial to strong.
+Current status: Mostly complete.
 
 Completed:
 
 - Cryptographic export is available from the Audit Explorer UI.
 - Signed export verification workflow is available from the Audit Explorer UI.
 - Backend exposes signed export, signing-key metadata, and verifier endpoints.
+- Shareable Trust Center pages are present with scoped auditor links, expiry, revocation, access logging, live framework scores, signed export downloads, and an embedded verifier guide.
+- Console Compliance Frameworks page can create and revoke auditor Trust Center links.
 
 Missing pieces:
 
-- Add shareable Trust Center page.
 - Add ClickHouse-backed search once ClickHouse ingestion is production-grade.
+- Broaden the Trust Center package into a full executive/auditor evidence bundle with policy snapshots, approvals, redaction metrics, and owner attestations.
 
 ### E3.6 Tenant Admin
 
@@ -387,13 +390,12 @@ Completed:
 
 - Signed/verifiable audit export is present.
 - Export includes audit logs and hash-chain proof metadata.
-- Verifier endpoint, UI verification workflow, and standalone CLI verifier are present.
+- Verifier endpoint, UI verification workflow, standalone CLI verifier, and Trust Center verifier guide are present.
 - Tamper detection and chain-gap tests are present.
 
 Missing pieces:
 
 - Broaden export package beyond audit logs to include redaction metrics, policy/config snapshots, approval evidence, and executive report sections.
-- Add auditor verification guide.
 
 ### E4.5 HA & Resilience
 
@@ -449,10 +451,9 @@ Missing pieces:
 
 ## Recommended Next Work Order
 
-1. Auditor Trust Center: shareable auditor page plus export verifier guide.
-2. CI/CD hardening: SAST, dependency scan, image build, Terraform plan, integration, and benchmark gates.
+1. CI/CD hardening: SAST, dependency scan, image build, Terraform plan, integration, and benchmark gates.
+2. Broader compliance export package: redaction metrics, policy/config snapshots, approvals, executive report sections, and owner attestations.
 3. Latency and red-team evidence: official NFR benchmark and adversarial harness.
 4. HA/resilience proof: staging failover drills, RTO/RPO report, Redis/Kafka/ClickHouse resilience tests.
 5. Enterprise auth/admin: OIDC/SSO UI, RBAC matrix, tenant tier/rate-limit management.
 6. External ephemeral worker runtime: isolated worker launch, live GitHub/GCP execution, and broader AWS remediation execution.
-7. Broader compliance export package: redaction metrics, policy/config snapshots, approvals, and executive report sections.

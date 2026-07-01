@@ -6,13 +6,17 @@ import {
   Award,
   CheckCircle2,
   ChevronRight,
+  Clipboard,
   Database,
   Download,
+  ExternalLink,
   FileCheck,
+  Link2,
   RefreshCw,
   ShieldCheck,
   XCircle,
 } from "lucide-react";
+import { copyTextToClipboard } from "@/lib/clipboard";
 
 type FrameworkId = "SOC2" | "GDPR" | "HIPAA";
 
@@ -68,6 +72,27 @@ interface ScoreHistoryItem {
   generated_at: string;
 }
 
+interface TrustCenterShare {
+  id: string;
+  label: string;
+  auditor_email: string;
+  frameworks: FrameworkId[];
+  permissions: string[];
+  status: "active" | "revoked" | "expired";
+  token_prefix: string;
+  expires_at: string;
+  created_at: string;
+  revoked_at: string;
+  last_accessed_at: string;
+  access_count: number;
+}
+
+interface CreatedTrustCenterShare {
+  share: TrustCenterShare;
+  token: string;
+  url: string;
+}
+
 const frameworkMeta: Record<FrameworkId, { name: string; desc: string; accent: string }> = {
   SOC2: {
     name: "SOC 2 Type II",
@@ -102,6 +127,17 @@ export default function FrameworksPage() {
   const [activeFramework, setActiveFramework] = useState<FrameworkId>("SOC2");
   const [exporting, setExporting] = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [trustShares, setTrustShares] = useState<TrustCenterShare[]>([]);
+  const [shareMessage, setShareMessage] = useState<string | null>(null);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [createdShare, setCreatedShare] = useState<CreatedTrustCenterShare | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [shareForm, setShareForm] = useState({
+    label: "Auditor readiness review",
+    auditorEmail: "",
+    expiresInDays: 30,
+    frameworks: ["SOC2", "GDPR", "HIPAA"] as FrameworkId[],
+  });
 
   const fetchScores = useCallback(async () => {
     setLoading(true);
@@ -132,12 +168,35 @@ export default function FrameworksPage() {
     }
   }, [activeFramework]);
 
+  const fetchTrustShares = useCallback(async () => {
+    try {
+      const res = await fetch("/api/trust-center/shares");
+      if (res.status === 401) {
+        window.location.href = "/login";
+        return;
+      }
+      if (!res.ok) throw new Error("Failed to load Trust Center shares");
+      setTrustShares(await res.json());
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to load Trust Center shares";
+      console.warn("Trust Center shares fetch failed:", message);
+      setShareMessage(message);
+    }
+  }, []);
+
   useEffect(() => {
     const timer = window.setTimeout(() => {
       void fetchScores();
     }, 0);
     return () => window.clearTimeout(timer);
   }, [fetchScores]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void fetchTrustShares();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchTrustShares]);
 
   const activeScore = useMemo(
     () => scores?.frameworks.find((item) => item.framework === activeFramework) || null,
@@ -168,6 +227,66 @@ export default function FrameworksPage() {
     } finally {
       setExporting(false);
     }
+  };
+
+  const toggleShareFramework = (framework: FrameworkId) => {
+    setShareForm((current) => {
+      const present = current.frameworks.includes(framework);
+      const frameworks = present
+        ? current.frameworks.filter((item) => item !== framework)
+        : [...current.frameworks, framework];
+      return { ...current, frameworks: frameworks.length ? frameworks : [framework] };
+    });
+  };
+
+  const handleCreateTrustShare = async () => {
+    setShareBusy(true);
+    setShareMessage(null);
+    setCreatedShare(null);
+    try {
+      const res = await fetch("/api/trust-center/shares", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label: shareForm.label,
+          auditor_email: shareForm.auditorEmail || null,
+          frameworks: shareForm.frameworks,
+          expires_in_days: shareForm.expiresInDays,
+        }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.detail || payload.error || "Failed to create auditor link");
+      setCreatedShare(payload);
+      setShareMessage("Auditor Trust Center link created. Copy it now; the raw token is only shown once.");
+      await fetchTrustShares();
+    } catch (err: unknown) {
+      setShareMessage(err instanceof Error ? err.message : "Failed to create auditor link");
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  const handleRevokeTrustShare = async (shareId: string) => {
+    setShareBusy(true);
+    setShareMessage(null);
+    try {
+      const res = await fetch(`/api/trust-center/shares/${encodeURIComponent(shareId)}/revoke`, { method: "POST" });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload.detail || payload.error || "Failed to revoke auditor link");
+      setShareMessage("Auditor link revoked.");
+      await fetchTrustShares();
+    } catch (err: unknown) {
+      setShareMessage(err instanceof Error ? err.message : "Failed to revoke auditor link");
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  const copyTrustCenterText = async (id: string, value: string) => {
+    const ok = await copyTextToClipboard(value);
+    if (!ok) return;
+    setCopied(id);
+    window.setTimeout(() => setCopied(null), 1500);
   };
 
   return (
@@ -384,6 +503,155 @@ export default function FrameworksPage() {
                 {exportMessage}
               </div>
             )}
+          </div>
+
+          <div className="rounded-2xl border border-slate-800 bg-[#09090d] p-5 shadow-xl space-y-4 relative overflow-hidden">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <Link2 className="w-4 h-4 text-sky-300" />
+                  Trust Center Share
+                </h3>
+                <p className="mt-2 text-xs text-slate-500 leading-normal">
+                  Create a scoped auditor page with live scores, signed export downloads, and a verifier guide.
+                </p>
+              </div>
+              <button
+                onClick={fetchTrustShares}
+                className="p-1.5 rounded-lg border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800"
+                title="Refresh Trust Center shares"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Review Label
+                <input
+                  value={shareForm.label}
+                  onChange={(event) => setShareForm((current) => ({ ...current, label: event.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-[#07070a] px-3 py-2 text-xs normal-case tracking-normal text-slate-200 outline-none focus:border-indigo-500"
+                />
+              </label>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Auditor Email
+                <input
+                  type="email"
+                  value={shareForm.auditorEmail}
+                  placeholder="auditor@example.com"
+                  onChange={(event) => setShareForm((current) => ({ ...current, auditorEmail: event.target.value }))}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-[#07070a] px-3 py-2 text-xs normal-case tracking-normal text-slate-200 outline-none focus:border-indigo-500"
+                />
+              </label>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Expires In Days
+                <input
+                  type="number"
+                  min={1}
+                  max={90}
+                  value={shareForm.expiresInDays}
+                  onChange={(event) => {
+                    const value = Math.max(1, Math.min(90, Number(event.target.value) || 30));
+                    setShareForm((current) => ({ ...current, expiresInDays: value }));
+                  }}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-[#07070a] px-3 py-2 text-xs normal-case tracking-normal text-slate-200 outline-none focus:border-indigo-500"
+                />
+              </label>
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Frameworks</div>
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  {(Object.keys(frameworkMeta) as FrameworkId[]).map((framework) => (
+                    <button
+                      key={framework}
+                      type="button"
+                      onClick={() => toggleShareFramework(framework)}
+                      className={`rounded-lg border px-2 py-2 text-[10px] font-bold transition ${
+                        shareForm.frameworks.includes(framework)
+                          ? "border-indigo-500/40 bg-indigo-500/15 text-indigo-100"
+                          : "border-slate-700 bg-[#07070a] text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      {framework}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={handleCreateTrustShare}
+              disabled={shareBusy}
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs shadow-lg transition active:scale-[0.98] disabled:opacity-50"
+            >
+              <Link2 className="w-4 h-4" />
+              {shareBusy ? "Creating Link..." : "Create Auditor Link"}
+            </button>
+
+            {createdShare && (
+              <div className="space-y-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-200">One-time auditor URL</div>
+                <div className="break-all rounded-lg border border-emerald-500/20 bg-[#050508] p-2 font-mono text-[10px] text-emerald-100">
+                  {createdShare.url}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => copyTrustCenterText("trust-url", createdShare.url)}
+                    className="flex items-center justify-center gap-1.5 rounded-lg border border-emerald-500/30 px-3 py-2 text-[10px] font-bold text-emerald-100 hover:bg-emerald-500/10"
+                  >
+                    <Clipboard className="w-3.5 h-3.5" />
+                    {copied === "trust-url" ? "Copied" : "Copy URL"}
+                  </button>
+                  <a
+                    href={createdShare.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center justify-center gap-1.5 rounded-lg border border-emerald-500/30 px-3 py-2 text-[10px] font-bold text-emerald-100 hover:bg-emerald-500/10"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Open
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {shareMessage && (
+              <div className="p-3 rounded-lg bg-slate-800/60 border border-slate-700 text-slate-300 text-[10px] leading-relaxed">
+                {shareMessage}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Recent Shares</div>
+              {trustShares.length === 0 ? (
+                <div className="rounded-lg border border-slate-800 bg-[#07070a] p-3 text-xs text-slate-500">No auditor links yet.</div>
+              ) : (
+                trustShares.slice(0, 5).map((share) => (
+                  <div key={share.id} className="rounded-lg border border-slate-800 bg-[#07070a] p-3 text-xs">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate font-bold text-slate-200">{share.label}</div>
+                        <div className="mt-1 text-[10px] text-slate-500">
+                          {share.status.toUpperCase()} - {share.frameworks.join(", ")} - {share.access_count} views
+                        </div>
+                        <div className="mt-1 text-[10px] text-slate-600">
+                          Expires {new Date(share.expires_at).toLocaleDateString()} - token {share.token_prefix}
+                        </div>
+                      </div>
+                      {share.status === "active" && (
+                        <button
+                          onClick={() => handleRevokeTrustShare(share.id)}
+                          disabled={shareBusy}
+                          className="rounded-md border border-red-500/30 px-2 py-1 text-[10px] font-bold text-red-200 hover:bg-red-500/10 disabled:opacity-50"
+                        >
+                          Revoke
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       </div>
