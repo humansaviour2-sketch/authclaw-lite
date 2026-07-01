@@ -38,7 +38,7 @@ isort>=5.13.2
 
 # Utilities
 python-dotenv>=1.0.1
-requests>=2.31.0
+requests>=2.34.2
 redis>=5.0.0
 
 # Phase 7 — Audit backbone
