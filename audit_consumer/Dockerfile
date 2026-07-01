@@ -4,9 +4,12 @@ WORKDIR /app
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+RUN addgroup --system authclaw && adduser --system --ingroup authclaw authclaw
 
-COPY . .
+COPY --chown=authclaw:authclaw . .
 
 EXPOSE 9108
+
+USER authclaw
 
 CMD ["python", "consumer.py"]

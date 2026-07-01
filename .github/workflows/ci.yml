@@ -63,6 +63,8 @@ jobs:
 
       - name: Scan for committed secrets
         uses: gitleaks/gitleaks-action@v2
+        with:
+          args: detect --source . --no-git --redact --verbose --config .gitleaks.toml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -111,7 +113,7 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
           format: table
-          skip-dirs: ".git,.terraform,node_modules,backend/.pytest_cache,audit_consumer/.pytest_cache"
+          skip-dirs: ".git,.terraform,node_modules,console/node_modules,backend/.venv,audit_consumer/.venv,backend/.pytest_cache,audit_consumer/.pytest_cache"
 
   backend-tests:
     name: Backend Migrations and Tests

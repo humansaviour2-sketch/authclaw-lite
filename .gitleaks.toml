@@ -1,0 +1,7 @@
+title = "AuthClaw secret scanning"
+
+[allowlist]
+description = "Non-secret envelope marker strings used by AuthClaw encryption."
+regexes = [
+  '''authclaw-secret-v[12]:''',
+]

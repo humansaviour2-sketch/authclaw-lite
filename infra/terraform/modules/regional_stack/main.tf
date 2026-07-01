@@ -7,8 +7,8 @@ locals {
   discovered_azs        = length(var.availability_zones) > 0 ? var.availability_zones : data.aws_availability_zones.available[0].names
   azs                   = slice(local.discovered_azs, 0, var.az_count)
   namespace_name        = "${var.name}.local"
-  listener_protocol     = var.certificate_arn != "" ? "HTTPS" : "HTTP"
-  public_scheme         = var.certificate_arn != "" ? "https" : "http"
+  listener_protocol     = "HTTPS"
+  public_scheme         = "https"
   public_host           = var.domain_name != "" ? var.domain_name : aws_lb.main.dns_name
   api_base_url          = "${local.public_scheme}://${local.public_host}:8000"
   gateway_base_url      = "${local.public_scheme}://${local.public_host}:8080"
@@ -22,7 +22,7 @@ locals {
     console = {
       image          = var.container_images.console
       container_port = 3001
-      listener_port  = var.certificate_arn != "" ? 443 : 80
+      listener_port  = 443
       health_path    = "/"
       command        = null
     }
@@ -174,13 +174,6 @@ resource "aws_security_group" "alb" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
     from_port   = 8000
     to_port     = 8080
     protocol    = "tcp"
@@ -195,9 +188,10 @@ resource "aws_security_group" "alb" {
   }
 
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
+    #trivy:ignore:AVD-AWS-0104 AuthClaw requires outbound provider/API access through NAT; app/data access is still security-group scoped inbound.
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -230,9 +224,10 @@ resource "aws_security_group" "app" {
   }
 
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
+    #trivy:ignore:AVD-AWS-0104 AuthClaw services call managed providers, KMS, Secrets Manager, and telemetry endpoints through NAT.
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -259,9 +254,10 @@ resource "aws_security_group" "data" {
   }
 
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
+    #trivy:ignore:AVD-AWS-0104 Managed data services keep security-group scoped ingress; egress remains available for service control-plane flows.
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -514,12 +510,14 @@ resource "aws_iam_role_policy" "task_secrets" {
 }
 
 resource "aws_lb" "main" {
-  name               = substr(replace("${var.name}-alb", "_", "-"), 0, 32)
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
-  subnets            = values(aws_subnet.public)[*].id
-  tags               = var.tags
+  name = substr(replace("${var.name}-alb", "_", "-"), 0, 32)
+  #trivy:ignore:AVD-AWS-0053 This ALB is the intentional public ingress for console/API/gateway traffic; private services are not attached.
+  internal                   = false
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.alb.id]
+  subnets                    = values(aws_subnet.public)[*].id
+  drop_invalid_header_fields = true
+  tags                       = var.tags
 }
 
 resource "aws_lb_target_group" "service" {
@@ -549,8 +547,8 @@ resource "aws_lb_listener" "service" {
   load_balancer_arn = aws_lb.main.arn
   port              = each.value.listener_port
   protocol          = local.listener_protocol
-  certificate_arn   = var.certificate_arn != "" ? var.certificate_arn : null
-  ssl_policy        = var.certificate_arn != "" ? "ELBSecurityPolicy-TLS13-1-2-2021-06" : null
+  certificate_arn   = var.certificate_arn
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
 
   default_action {
     type             = "forward"
