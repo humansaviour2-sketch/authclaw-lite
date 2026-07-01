@@ -3,8 +3,18 @@ import urllib.request
 import urllib.error
 import sys
 import os
+import time
 
-def check_port(host, port, service_name):
+
+def retry_count():
+    return max(1, int(os.getenv("AUTHCLAW_SMOKE_RETRIES", "1")))
+
+
+def retry_delay_seconds():
+    return max(0.1, float(os.getenv("AUTHCLAW_SMOKE_RETRY_DELAY_SECONDS", "2")))
+
+
+def check_port_once(host, port, service_name):
     print(f"Checking port {port} ({service_name})... ", end="")
     try:
         with socket.create_connection((host, port), timeout=3):
@@ -14,7 +24,17 @@ def check_port(host, port, service_name):
         print("CLOSED [FAIL]")
         return False
 
-def check_http_endpoint(url, expected_status=200):
+
+def check_port(host, port, service_name):
+    for attempt in range(1, retry_count() + 1):
+        if check_port_once(host, port, service_name):
+            return True
+        if attempt < retry_count():
+            time.sleep(retry_delay_seconds())
+    return False
+
+
+def check_http_endpoint_once(url, expected_status=200):
     print(f"Checking HTTP endpoint {url}... ", end="")
     try:
         with urllib.request.urlopen(url, timeout=5) as response:
@@ -35,6 +55,15 @@ def check_http_endpoint(url, expected_status=200):
     except Exception as e:
         print(f"ERROR ({str(e)}) [FAIL]")
         return False
+
+
+def check_http_endpoint(url, expected_status=200):
+    for attempt in range(1, retry_count() + 1):
+        if check_http_endpoint_once(url, expected_status):
+            return True
+        if attempt < retry_count():
+            time.sleep(retry_delay_seconds())
+    return False
 
 
 def parse_ports():
