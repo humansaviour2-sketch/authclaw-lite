@@ -22,6 +22,12 @@ variable "secondary_region" {
   default     = "us-west-2"
 }
 
+variable "ci_skip_aws_validation" {
+  description = "Skip AWS provider account and credential validation for speculative CI plans that use placeholder credentials."
+  type        = bool
+  default     = false
+}
+
 variable "primary_vpc_cidr" {
   type    = string
   default = "10.40.0.0/16"
@@ -30,6 +36,18 @@ variable "primary_vpc_cidr" {
 variable "secondary_vpc_cidr" {
   type    = string
   default = "10.50.0.0/16"
+}
+
+variable "primary_availability_zones" {
+  description = "Optional explicit primary-region AZ names for speculative CI plans."
+  type        = list(string)
+  default     = []
+}
+
+variable "secondary_availability_zones" {
+  description = "Optional explicit secondary-region AZ names for speculative CI plans."
+  type        = list(string)
+  default     = []
 }
 
 variable "container_images" {

@@ -6,7 +6,8 @@
     "dev": "next dev -p 3001",
     "build": "next build",
     "start": "next start -p 3001",
-    "lint": "eslint"
+    "lint": "eslint",
+    "postinstall": "node scripts/patch-next-picomatch.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.18.0",
@@ -25,6 +26,7 @@
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "@playwright/test": "^1.49.0"
+    "@playwright/test": "^1.49.0",
+    "picomatch": "4.0.4"
   }
 }

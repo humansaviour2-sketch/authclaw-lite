@@ -2,8 +2,9 @@ import { randomUUID } from "crypto";
 import fs from "fs";
 import path from "path";
 
-// File path outside src to prevent hot-reload loops
-const SESSIONS_FILE = path.join(process.cwd(), "sessions.json");
+// Keep session state outside src to prevent hot-reload loops and allow
+// production containers to point at a known writable location.
+const SESSIONS_FILE = process.env.AUTHCLAW_SESSION_STORE_PATH || path.join(".authclaw", "sessions.json");
 
 export interface SessionData {
   sessionId: string;
@@ -30,12 +31,13 @@ class SessionStore {
   }
 
   private writeSessions(sessions: Map<string, SessionData>) {
-    try {
-      const obj = Object.fromEntries(sessions.entries());
-      fs.writeFileSync(SESSIONS_FILE, JSON.stringify(obj, null, 2), "utf-8");
-    } catch (err) {
-      console.error("Failed to write sessions file:", err);
-    }
+    const obj = Object.fromEntries(sessions.entries());
+    const sessionDir = path.dirname(SESSIONS_FILE);
+    const tempFile = path.join(sessionDir, `.sessions-${process.pid}-${Date.now()}.tmp`);
+
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(tempFile, JSON.stringify(obj, null, 2), "utf-8");
+    fs.renameSync(tempFile, SESSIONS_FILE);
   }
 
   createSession(data: Omit<SessionData, "sessionId" | "createdAt">): SessionData {

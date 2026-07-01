@@ -21,6 +21,7 @@ venv/
 
 # Go binaries
 *.exe
+.gocache/
 
 # Test caches
 .pytest_cache/
@@ -30,6 +31,8 @@ venv/
 **/.terraform/
 *.tfstate
 *.tfstate.*
+tfplan
+*.tfplan
 *.tfvars
 !*.tfvars.example
 

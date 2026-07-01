@@ -58,8 +58,8 @@ def test_provider_secret_versioned_key_rotation(monkeypatch):
 
 def test_production_env_provider_requires_key_version_and_real_key(monkeypatch):
     monkeypatch.setenv("AUTHCLAW_ENV", "production")
-    monkeypatch.setenv("JWT_SECRET", "prod-jwt-secret-material-32-bytes")
-    monkeypatch.setenv("SESSION_SECRET", "prod-session-secret-material-32-bytes")
+    monkeypatch.setenv("JWT_SECRET", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    monkeypatch.setenv("SESSION_SECRET", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
     monkeypatch.setenv("AUTHCLAW_SECRET_PROVIDER", "env")
     monkeypatch.delenv("AUTHCLAW_SECRET_KEY_VERSION", raising=False)
     monkeypatch.setenv("ENVELOPE_KEY", "demo-local-envelope-key-change-me")

@@ -198,7 +198,7 @@ func TestAuditEvent_FrameworksAndTrace(t *testing.T) {
 func TestAuditEvent_RequestIDField(t *testing.T) {
 	event := &AuditEvent{
 		ID:        "rid-test",
-		RequestID: "req-abcdef1234567890",
+		RequestID: "request-id-json-tag-test",
 		TenantID:  "tenant-rid",
 		Timestamp: time.Now(),
 		Action:    "allow",
@@ -214,8 +214,8 @@ func TestAuditEvent_RequestIDField(t *testing.T) {
 	if err := json.Unmarshal(payload, &raw); err != nil {
 		t.Fatalf("unmarshal map: %v", err)
 	}
-	if raw["request_id"] != "req-abcdef1234567890" {
-		t.Errorf("Expected JSON key request_id='req-abcdef1234567890', got %v", raw["request_id"])
+	if raw["request_id"] != "request-id-json-tag-test" {
+		t.Errorf("Expected JSON key request_id='request-id-json-tag-test', got %v", raw["request_id"])
 	}
 }
 

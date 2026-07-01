@@ -1,124 +1,114 @@
 #!/usr/bin/env python3
-"""Minimal local LLM provider for gateway benchmark runs."""
+"""Tiny deterministic LLM provider used by CI integration and benchmark gates."""
 
 from __future__ import annotations
 
+import argparse
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 
 
 class MockProviderHandler(BaseHTTPRequestHandler):
     server_version = "AuthClawMockProvider/1.0"
 
+    def log_message(self, fmt: str, *args: Any) -> None:
+        print(f"{self.address_string()} - {fmt % args}")
+
     def do_GET(self) -> None:
         if self.path == "/health":
-            self.send_json(200, {"status": "ok"})
+            self._json(200, {"status": "healthy", "service": "mock-llm-provider"})
             return
-        self.send_json(404, {"error": "not_found"})
+        self._json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
-        length = int(self.headers.get("Content-Length", "0") or "0")
+        length = int(self.headers.get("content-length", "0") or "0")
         raw_body = self.rfile.read(length) if length else b"{}"
         try:
-            payload = json.loads(raw_body.decode("utf-8"))
+            body = json.loads(raw_body.decode("utf-8"))
         except json.JSONDecodeError:
-            payload = {}
+            body = {}
 
-        text = extract_text(payload)
-        if "streamGenerateContent" in self.path or payload.get("stream") is True:
-            self.send_stream(text)
+        if "streamGenerateContent" in self.path or body.get("stream") is True:
+            self._sse()
             return
-
-        if ":generateContent" in self.path:
-            self.send_json(
+        if "generateContent" in self.path or "/models/" in self.path:
+            self._json(
                 200,
                 {
                     "candidates": [
                         {
                             "content": {
-                                "parts": [{"text": f"Mock provider response for: {text}"}],
+                                "parts": [{"text": "Mock Gemini response from AuthClaw CI."}],
                                 "role": "model",
-                            }
+                            },
+                            "finishReason": "STOP",
                         }
                     ]
                 },
             )
             return
-
-        if self.path.startswith("/v1/chat/completions"):
-            self.send_json(
+        if "/v1/messages" in self.path:
+            self._json(
                 200,
                 {
-                    "choices": [
-                        {
-                            "message": {
-                                "role": "assistant",
-                                "content": f"Mock provider response for: {text}",
-                            }
-                        }
-                    ]
+                    "id": "msg_mock",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Mock Anthropic response from AuthClaw CI."}],
+                    "model": body.get("model", "mock"),
+                    "stop_reason": "end_turn",
                 },
             )
             return
-
-        if self.path.startswith("/v1/messages"):
-            self.send_json(
+        if "/v2/chat" in self.path:
+            self._json(
                 200,
-                {"content": [{"type": "text", "text": f"Mock provider response for: {text}"}]},
+                {
+                    "id": "chatcmpl-mock",
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": "Mock Cohere response."}]},
+                    "finish_reason": "COMPLETE",
+                },
             )
             return
+        self._json(
+            200,
+            {
+                "id": "chatcmpl-mock",
+                "object": "chat.completion",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "Mock OpenAI response."}, "finish_reason": "stop"}],
+            },
+        )
 
-        self.send_json(200, {"text": f"Mock provider response for: {text}"})
-
-    def send_json(self, status: int, payload: dict) -> None:
+    def _json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
-    def send_stream(self, text: str) -> None:
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.close_connection = True
+    def _sse(self) -> None:
         chunks = [
-            {"candidates": [{"content": {"parts": [{"text": "Mock stream response for: "}]}}]},
-            {"candidates": [{"content": {"parts": [{"text": text}]}}]},
+            {"candidates": [{"content": {"parts": [{"text": "Mock stream "}], "role": "model"}}]},
+            {"candidates": [{"content": {"parts": [{"text": "response."}], "role": "model"}, "finishReason": "STOP"}]},
         ]
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.send_header("cache-control", "no-cache")
+        self.end_headers()
         for chunk in chunks:
             self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
-            self.wfile.flush()
         self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
-
-    def log_message(self, format: str, *args: object) -> None:
-        return
-
-
-def extract_text(payload: dict) -> str:
-    texts: list[str] = []
-    for content in payload.get("contents", []):
-        for part in content.get("parts", []):
-            value = part.get("text")
-            if value:
-                texts.append(value)
-    for message in payload.get("messages", []):
-        value = message.get("content")
-        if isinstance(value, str):
-            texts.append(value)
-        elif isinstance(value, list):
-            for part in value:
-                if isinstance(part, dict) and part.get("text"):
-                    texts.append(part["text"])
-    return " ".join(texts)[:500] or "hello"
 
 
 def main() -> None:
-    server = ThreadingHTTPServer(("0.0.0.0", 18081), MockProviderHandler)
-    print("Mock LLM provider listening on http://0.0.0.0:18081", flush=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=19090)
+    args = parser.parse_args()
+    server = ThreadingHTTPServer((args.host, args.port), MockProviderHandler)
+    print(f"Mock LLM provider listening on http://{args.host}:{args.port}")
     server.serve_forever()
 
 

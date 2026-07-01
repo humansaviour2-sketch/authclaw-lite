@@ -19,9 +19,11 @@ module "primary" {
   environment           = var.environment
   region                = var.primary_region
   vpc_cidr              = var.primary_vpc_cidr
+  availability_zones    = var.primary_availability_zones
   container_images      = var.container_images
   desired_count         = var.desired_count_primary
   is_primary            = true
+  create_db_replica     = false
   authclaw_env          = var.authclaw_env
   certificate_arn       = var.primary_certificate_arn != "" ? var.primary_certificate_arn : var.certificate_arn
   domain_name           = var.domain_name
@@ -50,9 +52,11 @@ module "secondary" {
   environment           = var.environment
   region                = var.secondary_region
   vpc_cidr              = var.secondary_vpc_cidr
+  availability_zones    = var.secondary_availability_zones
   container_images      = var.container_images
   desired_count         = var.desired_count_secondary
   is_primary            = false
+  create_db_replica     = var.enable_cross_region_db_replica
   authclaw_env          = var.authclaw_env
   certificate_arn       = var.secondary_certificate_arn != "" ? var.secondary_certificate_arn : var.certificate_arn
   domain_name           = var.domain_name
