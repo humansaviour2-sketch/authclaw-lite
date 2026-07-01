@@ -21,21 +21,46 @@ interface DashboardMetrics {
   p99LatencyMs: number | null;
 }
 
+interface FrameworkScore {
+  framework: "SOC2" | "GDPR" | "HIPAA";
+  score: number;
+  readiness_level: string;
+  metrics: {
+    evidence_count: number;
+    audit_event_count: number;
+    open_findings: number;
+    critical_findings: number;
+  };
+}
+
+interface ComplianceScoreState {
+  overall_score: number;
+  readiness_level: string;
+  frameworks: FrameworkScore[];
+}
+
 export default function OverviewPage() {
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  const [complianceScores, setComplianceScores] = useState<ComplianceScoreState | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchMetrics = async () => {
     try {
       setLoading(true);
-      const res = await fetch("/api/dashboard");
-      if (res.status === 401) {
+      const [dashboardRes, scoresRes] = await Promise.all([
+        fetch("/api/dashboard"),
+        fetch("/api/compliance-scores"),
+      ]);
+      if (dashboardRes.status === 401 || scoresRes.status === 401) {
         window.location.href = "/login";
         return;
       }
-      if (!res.ok) throw new Error("Failed to load metrics");
-      const data = await res.json();
+      if (!dashboardRes.ok) throw new Error("Failed to load metrics");
+      const data = await dashboardRes.json();
       setMetrics(data);
+      if (scoresRes.ok) {
+        setComplianceScores(await scoresRes.json());
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Could not retrieve real-time metrics";
       console.warn("Overview fetch metrics failed:", message);
@@ -55,11 +80,13 @@ export default function OverviewPage() {
     };
   }, []);
 
-  const complianceReadiness = [
-    { name: "SOC 2 Type II", score: 85, color: "from-emerald-500 to-teal-500", desc: "Trust Services Criteria - Security & Confidentiality" },
-    { name: "GDPR", score: 78, color: "from-blue-500 to-indigo-500", desc: "Data Protection Safeguards & Consent Mechanisms" },
-    { name: "HIPAA Safeguards", score: 92, color: "from-purple-500 to-violet-500", desc: "Administrative, Physical & Technical Safeguards" }
-  ];
+  const frameworkLabels: Record<FrameworkScore["framework"], { name: string; color: string; desc: string }> = {
+    SOC2: { name: "SOC 2 Type II", color: "bg-emerald-500", desc: "Security, confidentiality, monitoring, and remediation controls" },
+    GDPR: { name: "GDPR", color: "bg-sky-500", desc: "Privacy-by-design, processing records, and security evidence" },
+    HIPAA: { name: "HIPAA Safeguards", color: "bg-amber-400", desc: "Access, audit, integrity, and transmission safeguards" },
+  };
+
+  const complianceReadiness = complianceScores?.frameworks || [];
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
@@ -195,34 +222,43 @@ export default function OverviewPage() {
           <div>
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <Award className="w-5 h-5 text-indigo-400" />
-              AI Governance Readiness
+              AI Governance Readiness {complianceScores ? `(${complianceScores.overall_score}%)` : ""}
             </h3>
             <p className="text-slate-400 text-xs mt-1">
-              Demo posture based on gateway controls, redaction activity, policies, and audit evidence.
+              Live readiness based on evidence records, findings, audit-chain events, policies, and redaction activity.
             </p>
           </div>
 
           <div className="space-y-6 mt-6">
-            {complianceReadiness.map((framework) => (
-              <div key={framework.name} className="space-y-2">
+            {complianceReadiness.length === 0 && (
+              <div className="rounded-xl border border-slate-800 bg-[#07070a] p-4 text-xs text-slate-500">
+                Compliance scores will appear after the scoring endpoint responds.
+              </div>
+            )}
+            {complianceReadiness.map((framework) => {
+              const meta = frameworkLabels[framework.framework];
+              return (
+              <div key={framework.framework} className="space-y-2">
                 <div className="flex justify-between text-xs">
-                  <span className="font-semibold text-slate-300">{framework.name}</span>
+                  <span className="font-semibold text-slate-300">{meta.name}</span>
                   <span className="font-bold text-white">{framework.score}% score</span>
                 </div>
                 <div className="h-2 w-full bg-slate-800/80 rounded-full overflow-hidden">
                   <div 
-                    className={`h-full bg-gradient-to-r ${framework.color} rounded-full transition-all duration-1000`} 
+                    className={`h-full ${meta.color} rounded-full transition-all duration-1000`}
                     style={{ width: `${framework.score}%` }} 
                   />
                 </div>
-                <p className="text-[10px] text-slate-500">{framework.desc}</p>
+                <p className="text-[10px] text-slate-500">
+                  {meta.desc} · {framework.metrics.evidence_count} evidence · {framework.metrics.open_findings} open findings
+                </p>
               </div>
-            ))}
+            );})}
           </div>
 
           <div className="mt-6 pt-4 border-t border-slate-800/40 flex justify-end">
-            <Link href="/connect" className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition">
-              Connect an AI app <ArrowUpRight className="w-3.5 h-3.5" />
+            <Link href="/frameworks" className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition">
+              View framework controls <ArrowUpRight className="w-3.5 h-3.5" />
             </Link>
           </div>
         </div>

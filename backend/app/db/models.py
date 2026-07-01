@@ -40,6 +40,7 @@ class Tenant(Base):
     evidence_records = relationship("EvidenceRecord", back_populates="tenant", cascade="all, delete-orphan")
     # Phase 17 — Findings Dashboard
     findings = relationship("Finding", back_populates="tenant", cascade="all, delete-orphan")
+    compliance_score_snapshots = relationship("ComplianceScoreSnapshot", back_populates="tenant", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_tenant_status", "status"),
@@ -748,4 +749,31 @@ class Finding(Base):
         Index("idx_finding_type", "finding_type"),
         Index("idx_finding_created", "created_at"),
         Index("idx_finding_key", "finding_key"),
+    )
+
+
+class ComplianceScoreSnapshot(Base):
+    """Daily framework readiness score snapshot for trend reporting."""
+    __tablename__ = "compliance_score_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    framework = Column(String(50), nullable=False)
+    snapshot_date = Column(String(10), nullable=False)
+    overall_score = Column(Float, nullable=False, default=0.0)
+    readiness_level = Column(String(50), nullable=False, default="insufficient_evidence")
+    control_scores = Column(JSON, nullable=False, default=dict)
+    evidence_count = Column(Integer, nullable=False, default=0)
+    audit_event_count = Column(Integer, nullable=False, default=0)
+    open_findings = Column(Integer, nullable=False, default=0)
+    critical_findings = Column(Integer, nullable=False, default=0)
+    generated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    tenant = relationship("Tenant", back_populates="compliance_score_snapshots")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "framework", "snapshot_date", name="uq_compliance_score_tenant_framework_date"),
+        Index("idx_compliance_score_tenant", "tenant_id"),
+        Index("idx_compliance_score_framework", "tenant_id", "framework"),
+        Index("idx_compliance_score_date", "tenant_id", "snapshot_date"),
     )
