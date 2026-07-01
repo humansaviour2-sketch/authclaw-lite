@@ -8,6 +8,8 @@ import uuid
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
+from app.core.crypto import encrypt_secret
+
 
 load_dotenv("../.env.local")
 load_dotenv(".env.local")
@@ -17,7 +19,10 @@ ADMIN_USER_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
 API_KEY_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
 GATEWAY_ID = uuid.UUID("44444444-4444-4444-8444-444444444444")
 POLICY_ID = uuid.UUID("55555555-5555-4555-8555-555555555555")
+PROVIDER_CREDENTIAL_ID = uuid.UUID("66666666-6666-4666-8666-666666666666")
 RAW_API_KEY = os.getenv("AUTHCLAW_LITE_DEMO_KEY", "acl_lite_demo_key")
+RAW_PROVIDER_KEY = os.getenv("AUTHCLAW_LITE_PROVIDER_KEY", "ci-mock-provider-key")
+PROVIDER_ENDPOINT = os.getenv("AUTHCLAW_LITE_PROVIDER_ENDPOINT", "")
 
 STARTER_POLICY = r'''regex_rules:
   - name: customer_email
@@ -131,6 +136,33 @@ def main() -> None:
                 updated_at = NOW()
             """),
             {"id": GATEWAY_ID, "tenant_id": TENANT_ID},
+        )
+
+        conn.execute(
+            text("""
+            INSERT INTO provider_credentials (
+                id, tenant_id, provider, display_name, endpoint, encrypted_secret,
+                auth_scheme, status, created_by, version, revoked_at
+            )
+            VALUES (
+                :id, :tenant_id, 'gemini', 'Demo Gemini Credential', :endpoint, :encrypted_secret,
+                'api_key', 'active', :created_by, 1, NULL
+            )
+            ON CONFLICT (id) DO UPDATE SET
+                endpoint = EXCLUDED.endpoint,
+                encrypted_secret = EXCLUDED.encrypted_secret,
+                status = 'active',
+                revoked_at = NULL,
+                rotated_at = NOW(),
+                version = provider_credentials.version + 1
+            """),
+            {
+                "id": PROVIDER_CREDENTIAL_ID,
+                "tenant_id": TENANT_ID,
+                "endpoint": PROVIDER_ENDPOINT or None,
+                "encrypted_secret": encrypt_secret(RAW_PROVIDER_KEY),
+                "created_by": ADMIN_USER_ID,
+            },
         )
 
         conn.execute(text("UPDATE policies SET is_active = false WHERE tenant_id = :tenant_id"), {"tenant_id": TENANT_ID})

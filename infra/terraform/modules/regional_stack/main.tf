@@ -1,9 +1,11 @@
 data "aws_availability_zones" "available" {
+  count = length(var.availability_zones) == 0 ? 1 : 0
   state = "available"
 }
 
 locals {
-  azs                   = slice(data.aws_availability_zones.available.names, 0, var.az_count)
+  discovered_azs        = length(var.availability_zones) > 0 ? var.availability_zones : data.aws_availability_zones.available[0].names
+  azs                   = slice(local.discovered_azs, 0, var.az_count)
   namespace_name        = "${var.name}.local"
   listener_protocol     = var.certificate_arn != "" ? "HTTPS" : "HTTP"
   public_scheme         = var.certificate_arn != "" ? "https" : "http"
@@ -13,8 +15,8 @@ locals {
   internal_opa_url      = "http://opa.${local.namespace_name}:8181"
   internal_presidio_url = "http://presidio.${local.namespace_name}:3000"
   db_password           = var.db_password != "" ? var.db_password : random_password.db.result
-  db_address            = var.replica_source_db_arn != "" ? aws_db_instance.postgres_replica[0].address : aws_db_instance.postgres_primary[0].address
-  db_arn                = var.replica_source_db_arn != "" ? aws_db_instance.postgres_replica[0].arn : aws_db_instance.postgres_primary[0].arn
+  db_address            = var.create_db_replica ? aws_db_instance.postgres_replica[0].address : aws_db_instance.postgres_primary[0].address
+  db_arn                = var.create_db_replica ? aws_db_instance.postgres_replica[0].arn : aws_db_instance.postgres_primary[0].arn
 
   public_services = {
     console = {
@@ -293,7 +295,7 @@ resource "aws_db_subnet_group" "main" {
 }
 
 resource "aws_db_instance" "postgres_primary" {
-  count = var.replica_source_db_arn == "" ? 1 : 0
+  count = var.create_db_replica ? 0 : 1
 
   identifier              = "${var.name}-postgres"
   engine                  = "postgres"
@@ -315,7 +317,7 @@ resource "aws_db_instance" "postgres_primary" {
 }
 
 resource "aws_db_instance" "postgres_replica" {
-  count = var.replica_source_db_arn != "" ? 1 : 0
+  count = var.create_db_replica ? 1 : 0
 
   identifier             = "${var.name}-postgres"
   replicate_source_db    = var.replica_source_db_arn

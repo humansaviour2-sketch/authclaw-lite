@@ -8,7 +8,7 @@ This checklist maps the project plan epics and exit criteria against the current
 
 ## Executive Summary
 
-AuthClaw now has meaningful coverage for the gateway, provider adapters, streaming redaction, HITL, remediation state machine with rollback, audit hash-chain, signed audit exports, ClickHouse audit analytics, Kafka event backbone, auth/API-key lifecycle, secret envelopes, Terraform baseline, regulatory RAG, ephemeral worker tokens, Auditor Trust Center sharing, compliance scoring, and multi-region RDS standby design. The remaining gaps are concentrated in five areas:
+AuthClaw now has meaningful coverage for the gateway, provider adapters, streaming redaction, HITL, remediation state machine with rollback, audit hash-chain, signed audit exports, ClickHouse audit analytics, Kafka event backbone, auth/API-key lifecycle, secret envelopes, Terraform baseline, regulatory RAG, ephemeral worker tokens, Auditor Trust Center sharing, compliance scoring, hardened CI/CD gates, and multi-region RDS standby design. The remaining gaps are concentrated in five areas:
 
 1. Full external worker runtimes and cloud/SCM connector execution beyond the current AWS path.
 2. Broader compliance report packaging and auditor-ready evidence bundles.
@@ -33,6 +33,7 @@ AuthClaw now has meaningful coverage for the gateway, provider adapters, streami
 - Cryptographic audit export added with Ed25519-signed export artifacts, SHA-256 payload digest, offline verifier CLI, tamper/chain-gap detection tests, backend export/verify endpoints, and console signed-export/verify controls.
 - Compliance dashboard scoring added with live SOC 2/GDPR/HIPAA readiness scores from evidence, findings, audit-chain events, redaction records, policies, gateways, and approvals; control-by-control explanations, score history snapshots, trend API, and console framework dashboard are present.
 - Auditor Trust Center added with scoped share links, token-hash storage, expiry/revocation, public auditor page, live framework scores, signed export downloads, export upload verifier, auditor verification guide, and access logging.
+- CI/CD hardening added with CodeQL SAST, secret scanning, dependency audits, Trivy filesystem/image scans, backend/gateway/console/audit-consumer tests, Docker image build/push, Terraform speculative plan checks, full-stack integration, benchmark gate, Dependabot, OPA bundle image, and fail-closed security policy.
 
 ## Phase 1 - Foundation & Architecture
 
@@ -51,17 +52,23 @@ Missing pieces:
 
 ### E1.2 CI/CD Pipeline
 
-Current status: Partial.
+Current status: Mostly complete.
+
+Completed:
+
+- SAST, secret scanning, dependency scanning, IaC scanning, and image scanning gates are defined.
+- Docker image build/push jobs cover backend, gateway, console, audit consumer, and OPA bundle image.
+- Terraform format, validate, and speculative plan checks run for pull requests and protected branches.
+- Integration test stage brings up the demo stack with backend, gateway, console, Postgres, Redis, OPA, Presidio, and deterministic mock provider.
+- Benchmark gate enforces gateway p95/p99 thresholds and uploads benchmark evidence.
+- Security-scan fail policy blocks high/critical findings.
+- Dependabot automation covers GitHub Actions, npm, pip, Go modules, and Docker base images.
 
 Missing pieces:
 
-- Add SAST and dependency scanning gates.
-- Add Docker image build and push jobs for backend, gateway, console, audit consumer, OPA bundle image.
-- Add environment promotion gates for staging and production.
-- Add Terraform plan checks for pull requests.
-- Add integration test stage using gateway, backend, console, Postgres, Redis, OPA, Presidio, Kafka, and ClickHouse.
-- Add benchmark gate for gateway latency/redaction regressions.
-- Add security-scan fail policy for high/critical findings.
+- Add protected GitHub Environments for staging and production promotion approvals.
+- Add real staging deployment jobs once cloud credentials and remote Terraform state are configured.
+- Add ClickHouse/Kafka full-stack integration profile to CI or a nightly workflow once runtime cost/time budget is accepted.
 
 ### E1.3 Multi-Tenant Data Model
 
@@ -451,9 +458,9 @@ Missing pieces:
 
 ## Recommended Next Work Order
 
-1. CI/CD hardening: SAST, dependency scan, image build, Terraform plan, integration, and benchmark gates.
-2. Broader compliance export package: redaction metrics, policy/config snapshots, approvals, executive report sections, and owner attestations.
-3. Latency and red-team evidence: official NFR benchmark and adversarial harness.
-4. HA/resilience proof: staging failover drills, RTO/RPO report, Redis/Kafka/ClickHouse resilience tests.
-5. Enterprise auth/admin: OIDC/SSO UI, RBAC matrix, tenant tier/rate-limit management.
-6. External ephemeral worker runtime: isolated worker launch, live GitHub/GCP execution, and broader AWS remediation execution.
+1. Broader compliance export package: redaction metrics, policy/config snapshots, approvals, executive report sections, and owner attestations.
+2. Latency and red-team evidence: official NFR benchmark and adversarial harness.
+3. HA/resilience proof: staging failover drills, RTO/RPO report, Redis/Kafka/ClickHouse resilience tests.
+4. Enterprise auth/admin: OIDC/SSO UI, RBAC matrix, tenant tier/rate-limit management.
+5. External ephemeral worker runtime: isolated worker launch, live GitHub/GCP execution, and broader AWS remediation execution.
+6. Staging/prod promotion proof: protected environments, real Terraform remote state, and deployment approvals.

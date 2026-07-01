@@ -2,8 +2,7 @@ import socket
 import urllib.request
 import urllib.error
 import sys
-import json
-import time
+import os
 
 def check_port(host, port, service_name):
     print(f"Checking port {port} ({service_name})... ", end="")
@@ -37,34 +36,57 @@ def check_http_endpoint(url, expected_status=200):
         print(f"ERROR ({str(e)}) [FAIL]")
         return False
 
+
+def parse_ports():
+    raw = os.getenv("AUTHCLAW_SMOKE_PORTS", "")
+    if not raw.strip():
+        return [
+            ("localhost", 8000, "FastAPI Backend"),
+            ("localhost", 8080, "Go Gateway"),
+            ("localhost", 3001, "Next.js Console"),
+            ("localhost", 8123, "ClickHouse"),
+            ("localhost", 6379, "Redis"),
+        ]
+    ports = []
+    for item in raw.split(","):
+        if not item.strip():
+            continue
+        port_part, _, name = item.partition(":")
+        ports.append(("localhost", int(port_part.strip()), name.strip() or f"Port {port_part.strip()}"))
+    return ports
+
+
+def parse_endpoints():
+    raw = os.getenv("AUTHCLAW_SMOKE_ENDPOINTS", "")
+    if not raw.strip():
+        return [
+            ("http://localhost:8000/health", 200),
+            ("http://localhost:3001/login", 200),
+        ]
+    endpoints = []
+    for item in raw.split(","):
+        if not item.strip():
+            continue
+        url, _, status = item.partition("=")
+        endpoints.append((url.strip(), int(status.strip() or "200")))
+    return endpoints
+
+
 def main():
     print("==================================================")
     print("AuthClaw Phase 13 System Smoke Test")
     print("==================================================")
     
-    host = "localhost"
-    ports = [
-        (8000, "FastAPI Backend"),
-        (8080, "Go Gateway"),
-        (3001, "Next.js Console"),
-        (8123, "ClickHouse"),
-        (6379, "Redis"),
-    ]
-    
     all_passed = True
-    for port, name in ports:
+    for host, port, name in parse_ports():
         if not check_port(host, port, name):
             all_passed = False
             
     print("\nValidating HTTP Service Health...")
-    
-    # 1. Backend health check
-    if not check_http_endpoint("http://localhost:8000/health"):
-        all_passed = False
-        
-    # 2. Console home page loading
-    if not check_http_endpoint("http://localhost:3001/login"):
-        all_passed = False
+
+    for url, expected_status in parse_endpoints():
+        if not check_http_endpoint(url, expected_status):
+            all_passed = False
 
     print("==================================================")
     if all_passed:

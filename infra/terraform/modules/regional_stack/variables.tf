@@ -19,6 +19,12 @@ variable "az_count" {
   default = 2
 }
 
+variable "availability_zones" {
+  description = "Optional explicit availability zone names. CI uses this to avoid AWS data-source reads during speculative plans."
+  type        = list(string)
+  default     = []
+}
+
 variable "container_images" {
   type = object({
     backend        = string
@@ -43,6 +49,12 @@ variable "desired_count" {
 variable "is_primary" {
   type    = bool
   default = true
+}
+
+variable "create_db_replica" {
+  description = "Create this regional database as a replica. Kept explicit so Terraform can plan without depending on unknown ARN values."
+  type        = bool
+  default     = false
 }
 
 variable "service_cpu" {

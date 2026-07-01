@@ -3,12 +3,15 @@ import { test, expect } from '@playwright/test';
 test.describe('AuthClaw E2E Console Verification', () => {
 
   test('complete app shell flow', async ({ page }) => {
+    const email = process.env.E2E_LOGIN_EMAIL || 'admin@authclaw-lite.demo';
+    const apiKey = process.env.E2E_LOGIN_API_KEY || 'acl_lite_demo_key';
+
     // 1. Login
     await page.goto('/login');
     await expect(page.locator('h1')).toContainText('AuthClaw Console');
 
-    await page.fill('input[type="email"]', 'admin@authclaw.com');
-    await page.fill('input[type="password"]', 'manual_verif_key_123');
+    await page.fill('input[type="email"]', email);
+    await page.fill('input[type="password"]', apiKey);
     await page.click('button[type="submit"]');
 
     // Wait for Overview page redirect
