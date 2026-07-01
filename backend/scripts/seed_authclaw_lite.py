@@ -3,10 +3,16 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 import uuid
+from pathlib import Path
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.core.crypto import encrypt_secret
 

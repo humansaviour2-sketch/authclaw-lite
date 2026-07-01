@@ -314,7 +314,7 @@ jobs:
         run: docker compose --profile ci -f docker-compose.demo.yml up -d --build
 
       - name: Seed demo tenant and gateway key
-        run: docker compose -f docker-compose.demo.yml exec -T backend sh -c 'DATABASE_URL="$OWNER_DATABASE_URL" python scripts/seed_authclaw_lite.py'
+        run: docker compose -f docker-compose.demo.yml exec -T backend sh -c 'cd /app && DATABASE_URL="$OWNER_DATABASE_URL" PYTHONPATH=/app python scripts/seed_authclaw_lite.py'
 
       - name: Smoke test full stack
         run: python scripts/smoke_test.py
