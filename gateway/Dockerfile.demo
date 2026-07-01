@@ -7,7 +7,7 @@ RUN go mod download
 COPY . .
 RUN go build -o /out/authclaw-gateway .
 
-FROM alpine:3.20
+FROM alpine:3.24
 WORKDIR /app
 RUN addgroup -S authclaw && adduser -S -G authclaw authclaw
 COPY --from=build --chown=authclaw:authclaw /out/authclaw-gateway /app/authclaw-gateway
