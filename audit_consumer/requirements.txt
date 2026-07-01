@@ -1,4 +1,4 @@
-kafka-python>=2.0.2
+kafka-python>=3.0.7
 clickhouse-connect>=0.7.0
 python-dotenv>=1.0.1
 redis>=5.0.0
