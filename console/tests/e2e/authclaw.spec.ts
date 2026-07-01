@@ -22,7 +22,7 @@ test.describe('AuthClaw E2E Console Verification', () => {
 
     await page.goto('/audit');
     await expect(page.locator('h1')).toContainText('Audit Explorer');
-    await page.waitForSelector('table');
+    await expect(page.locator('body')).toContainText(/No data available yet|Showing \d+ entries|Event Metadata/);
 
     const rowsCount = await page.locator('table tbody tr').count();
     if (rowsCount > 0) {
