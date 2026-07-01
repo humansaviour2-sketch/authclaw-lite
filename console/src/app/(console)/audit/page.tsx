@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { 
   ScrollText, 
   Search, 
@@ -38,6 +38,21 @@ interface AuditRecord {
   prior_hash?: string;
   integrity_hash?: string;
   execution_trace?: string | string[] | null;
+}
+
+interface AuditExportVerifyResult {
+  verified: boolean;
+  signature_valid: boolean;
+  digest_valid: boolean;
+  chain_valid: boolean;
+  record_count: number;
+  tenant_id: string;
+  key_id: string;
+  errors: string[];
+  first_record_id: string;
+  last_record_id: string;
+  first_hash: string;
+  last_hash: string;
 }
 
 const errorMessage = (err: unknown, fallback: string) => (err instanceof Error ? err.message : fallback);
@@ -78,6 +93,11 @@ export default function AuditPage() {
   // Inspector Panel State
   const [selectedRecord, setSelectedRecord] = useState<AuditRecord | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [signedExportBusy, setSignedExportBusy] = useState(false);
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [verifyResult, setVerifyResult] = useState<AuditExportVerifyResult | null>(null);
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const verifyInputRef = useRef<HTMLInputElement | null>(null);
   const inspectedProvider: string = typeof selectedRecord?.provider === "string" ? selectedRecord.provider : "";
   const inspectedAction: string = typeof selectedRecord?.action === "string" ? selectedRecord.action : "";
   const inspectedActorId: string = typeof selectedRecord?.actor_id === "string" && selectedRecord.actor_id ? selectedRecord.actor_id : "System";
@@ -193,6 +213,60 @@ export default function AuditPage() {
     downloadAnchor.remove();
   };
 
+  const exportSignedAudit = async () => {
+    setSignedExportBusy(true);
+    setExportStatus(null);
+    setVerifyResult(null);
+    try {
+      const body = {
+        action: actionFilter || null,
+        start: dateStart ? new Date(dateStart).toISOString() : null,
+        end: dateEnd ? new Date(`${dateEnd}T23:59:59.999`).toISOString() : null,
+      };
+      const res = await fetch("/api/audit/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const artifact = await res.json();
+      if (!res.ok) throw new Error(artifact.error || "Signed export failed");
+      const dataStr = "data:application/json;charset=utf-8," + encodeURIComponent(JSON.stringify(artifact, null, 2));
+      const downloadAnchor = document.createElement("a");
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", `authclaw_signed_audit_export_${artifact.payload?.export_id || Date.now()}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+      setExportStatus(`Signed ${artifact.payload?.record_count ?? 0} records with ${artifact.signature?.algorithm || "signature"}.`);
+    } catch (err: unknown) {
+      setExportStatus(errorMessage(err, "Signed export failed"));
+    } finally {
+      setSignedExportBusy(false);
+    }
+  };
+
+  const verifySignedAudit = async (file: File) => {
+    setVerifyBusy(true);
+    setExportStatus(null);
+    setVerifyResult(null);
+    try {
+      const artifact = JSON.parse(await file.text());
+      const res = await fetch("/api/audit/export/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artifact }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Verification failed");
+      setVerifyResult(data);
+    } catch (err: unknown) {
+      setExportStatus(errorMessage(err, "Could not verify signed export"));
+    } finally {
+      setVerifyBusy(false);
+      if (verifyInputRef.current) verifyInputRef.current.value = "";
+    }
+  };
+
   const handlePrevPage = () => {
     if (offset >= limit) {
       setOffset(offset - limit);
@@ -240,8 +314,73 @@ export default function AuditPage() {
             <Download className="w-4.5 h-4.5 text-emerald-400" />
             Export CSV
           </button>
+
+          <button
+            onClick={exportSignedAudit}
+            disabled={signedExportBusy}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-650 hover:bg-indigo-600 text-white border border-indigo-500/40 text-xs font-semibold transition disabled:opacity-50"
+          >
+            <ShieldCheck className="w-4.5 h-4.5" />
+            {signedExportBusy ? "Signing..." : "Signed Export"}
+          </button>
+
+          <input
+            ref={verifyInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void verifySignedAudit(file);
+            }}
+          />
+          <button
+            onClick={() => verifyInputRef.current?.click()}
+            disabled={verifyBusy}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition disabled:opacity-50"
+          >
+            <ShieldAlert className="w-4.5 h-4.5 text-sky-400" />
+            {verifyBusy ? "Verifying..." : "Verify Export"}
+          </button>
         </div>
       </div>
+
+      {(exportStatus || verifyResult) && (
+        <div className={`rounded-2xl border p-4 text-xs ${
+          verifyResult?.verified
+            ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-100"
+            : verifyResult
+              ? "border-red-500/20 bg-red-500/10 text-red-100"
+              : "border-slate-800 bg-[#09090d] text-slate-300"
+        }`}>
+          {verifyResult ? (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <div className="flex items-center gap-2 font-bold">
+                  {verifyResult.verified ? <ShieldCheck className="w-4 h-4" /> : <ShieldAlert className="w-4 h-4" />}
+                  {verifyResult.verified ? "Signed audit export verified" : "Signed audit export failed verification"}
+                </div>
+                <div className="mt-1 text-[11px] opacity-80">
+                  {verifyResult.record_count} records · key {verifyResult.key_id} · signature {verifyResult.signature_valid ? "valid" : "invalid"} · chain {verifyResult.chain_valid ? "valid" : "invalid"}
+                </div>
+                {verifyResult.errors.length > 0 && (
+                  <div className="mt-2 font-mono text-[10px] opacity-90">
+                    {verifyResult.errors.slice(0, 3).join(" | ")}
+                  </div>
+                )}
+              </div>
+              <div className="font-mono text-[10px] opacity-70">
+                Last hash {verifyResult.last_hash.slice(0, 16)}...
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-indigo-400" />
+              {exportStatus}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Filters Panel */}
       <div className="rounded-2xl border border-slate-800 bg-[#09090d] p-5 shadow-xl space-y-4">

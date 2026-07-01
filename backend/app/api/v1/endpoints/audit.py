@@ -10,7 +10,7 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -24,6 +24,11 @@ from app.services.audit_store import (
     build_consistency_report,
     clickhouse_configured,
     replay_postgres_to_clickhouse,
+)
+from app.services.audit_export import (
+    build_signed_audit_export,
+    signing_key_metadata,
+    verify_signed_audit_export,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,6 +81,32 @@ class AuditStoreStatusResponse(BaseModel):
 
 class AuditReplayRequest(BaseModel):
     dry_run: bool = False
+
+
+class SignedAuditExportRequest(BaseModel):
+    action: Optional[str] = None
+    framework: Optional[str] = None
+    start: Optional[datetime] = None
+    end: Optional[datetime] = None
+
+
+class SignedAuditVerifyRequest(BaseModel):
+    artifact: Dict[str, Any]
+
+
+class SignedAuditVerifyResponse(BaseModel):
+    verified: bool
+    signature_valid: bool
+    digest_valid: bool
+    chain_valid: bool
+    record_count: int
+    tenant_id: str
+    key_id: str
+    errors: List[str]
+    first_record_id: str
+    last_record_id: str
+    first_hash: str
+    last_hash: str
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -237,6 +268,51 @@ def get_audit_logs(
 
     # ── PostgreSQL fallback ────────────────────────────────────────────────────
     return _query_postgres(db, tenant_id, limit, offset, action, integrity_check)
+
+
+@router.get(
+    "/export/signing-key",
+    dependencies=[require_scopes(["read"])],
+)
+def get_audit_export_signing_key():
+    try:
+        return signing_key_metadata()
+    except Exception as exc:
+        logger.error("Audit export signing key metadata failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Audit export signing key is not configured") from exc
+
+
+@router.post(
+    "/export",
+    dependencies=[require_scopes(["read"])],
+)
+def create_signed_audit_export(
+    request: Request,
+    export_request: SignedAuditExportRequest,
+    db: Session = Depends(get_tenant_db),
+):
+    try:
+        return build_signed_audit_export(
+            db,
+            tenant_id=str(request.state.tenant_id),
+            requested_by=str(getattr(request.state, "user_id", "")),
+            action=export_request.action,
+            framework=export_request.framework,
+            start=export_request.start.astimezone(timezone.utc) if export_request.start else None,
+            end=export_request.end.astimezone(timezone.utc) if export_request.end else None,
+        )
+    except Exception as exc:
+        logger.error("Signed audit export failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Signed audit export failed: {str(exc)}") from exc
+
+
+@router.post(
+    "/export/verify",
+    response_model=SignedAuditVerifyResponse,
+    dependencies=[require_scopes(["read"])],
+)
+def verify_audit_export(verify_request: SignedAuditVerifyRequest):
+    return verify_signed_audit_export(verify_request.artifact).as_dict()
 
 
 @router.get(

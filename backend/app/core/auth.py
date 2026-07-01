@@ -37,7 +37,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             "/v1/onboarding/verify",
             "/v1/auth/oidc/config",
         }
-        if path in public_paths or path.startswith("/static"):
+        if path in public_paths or path.startswith("/static") or path.startswith("/v1/trust-center/public"):
             return await call_next(request)
 
         auth_header = request.headers.get("Authorization")
