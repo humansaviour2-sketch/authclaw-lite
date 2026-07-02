@@ -323,11 +323,14 @@ jobs:
       AUTHCLAW_BENCH_API_KEY: acl_lite_demo_key
       AUTHCLAW_BENCH_PROVIDER: gemini
       AUTHCLAW_BENCH_MODEL: gemini-2.5-flash-lite
+      AUTHCLAW_BENCH_PROVIDER_BASELINE_URL: http://localhost:19090
       AUTHCLAW_BENCH_SCENARIOS: allow,redact,block
       AUTHCLAW_BENCH_REQUESTS: "12"
       AUTHCLAW_BENCH_CONCURRENCY: "3"
       AUTHCLAW_BENCH_P95_MS: "900"
       AUTHCLAW_BENCH_P99_MS: "1200"
+      AUTHCLAW_BENCH_OVERHEAD_P95_MS: "50"
+      AUTHCLAW_BENCH_TRANSFORM_OVERHEAD_P95_MS: "250"
       AUTHCLAW_BENCH_JSON_OUTPUT: gateway-benchmark-ci.json
     steps:
       - name: Check out repository

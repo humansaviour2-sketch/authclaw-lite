@@ -76,7 +76,7 @@ The real gap is no longer "missing big modules." The gap is hardening the module
 
 ## Priority 1 - Match The Analysis / Close Product Gaps
 
-### 5. Tighten latency benchmark gates to the SRS target
+### 5. Tighten latency benchmark gates to the SRS target - DONE
 
 **Why:** SRS NFR-1.1 says gateway overhead should be <=50ms. Existing benchmark artifacts show provider-inclusive p95 values far above 50ms and CI gates allow p95 900ms / p99 1200ms. That may be fine for end-to-end provider latency, but it does not prove SRS gateway overhead.
 
@@ -89,6 +89,11 @@ The real gap is no longer "missing big modules." The gap is hardening the module
 - Split benchmarks into two metrics: provider-inclusive e2e latency and gateway overhead with mock provider baseline subtraction.
 - Add a CI gate for overhead p95 <=50ms on allow/block and a separate realistic threshold for redaction/streaming.
 - Keep current benchmark as evidence, but stop presenting it as proof of the 50ms SRS target.
+
+**Implemented:**
+- `scripts/gateway_latency_benchmark.py` now keeps provider-inclusive p50/p95/p99 and adds provider-baseline-subtracted gateway overhead fields when `AUTHCLAW_BENCH_PROVIDER_BASELINE_URL` is set.
+- CI benchmarks now use the mock provider baseline URL, gate allow/block overhead p95 at 50ms, and gate redaction/streaming overhead separately.
+- Block/HITL scenarios are treated as gateway-only overhead because they should not call the provider.
 
 ### 6. Ship a minimal SDK/developer experience package
 

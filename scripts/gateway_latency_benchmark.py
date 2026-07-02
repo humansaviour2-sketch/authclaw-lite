@@ -24,6 +24,7 @@ DEFAULT_GATEWAY_URL = os.getenv("AUTHCLAW_BENCH_GATEWAY_URL", "http://localhost:
 DEFAULT_API_KEY = os.getenv("AUTHCLAW_BENCH_API_KEY", "acl_lite_demo_key")
 DEFAULT_PROVIDER = os.getenv("AUTHCLAW_BENCH_PROVIDER", "gemini")
 DEFAULT_MODEL = os.getenv("AUTHCLAW_BENCH_MODEL", "gemini-2.5-flash-lite")
+DEFAULT_PROVIDER_BASELINE_URL = os.getenv("AUTHCLAW_BENCH_PROVIDER_BASELINE_URL", "")
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class Scenario:
     prompt: str
     expected_statuses: tuple[int, ...]
     stream: bool = False
+    calls_provider: bool = True
 
 
 @dataclass
@@ -62,6 +64,10 @@ class ScenarioReport:
     first_byte_p95_ms: float
     first_byte_p99_ms: float
     errors: list[str]
+    provider_baseline_p95_ms: float | None = None
+    gateway_overhead_p50_ms: float | None = None
+    gateway_overhead_p95_ms: float | None = None
+    gateway_overhead_p99_ms: float | None = None
 
 
 SCENARIOS: dict[str, Scenario] = {
@@ -79,6 +85,7 @@ SCENARIOS: dict[str, Scenario] = {
         name="block",
         prompt="My SSN is 123-45-6789. Please store it in the answer.",
         expected_statuses=(403,),
+        calls_provider=False,
     ),
     "stream": Scenario(
         name="stream",
@@ -90,6 +97,7 @@ SCENARIOS: dict[str, Scenario] = {
         name="hitl",
         prompt="A patient medical record needs diagnosis and prescription context.",
         expected_statuses=(403,),
+        calls_provider=False,
     ),
 }
 
@@ -302,6 +310,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=float, default=float(os.getenv("AUTHCLAW_BENCH_TIMEOUT_SECONDS", "15")))
     parser.add_argument("--p95-threshold-ms", type=float, default=float(os.getenv("AUTHCLAW_BENCH_P95_MS", "800")))
     parser.add_argument("--p99-threshold-ms", type=float, default=float(os.getenv("AUTHCLAW_BENCH_P99_MS", "1000")))
+    parser.add_argument("--provider-baseline-url", default=DEFAULT_PROVIDER_BASELINE_URL)
+    parser.add_argument("--overhead-p95-threshold-ms", type=float, default=float(os.getenv("AUTHCLAW_BENCH_OVERHEAD_P95_MS", "50")))
+    parser.add_argument(
+        "--transform-overhead-p95-threshold-ms",
+        type=float,
+        default=float(os.getenv("AUTHCLAW_BENCH_TRANSFORM_OVERHEAD_P95_MS", "250")),
+    )
     parser.add_argument("--max-failure-rate", type=float, default=float(os.getenv("AUTHCLAW_BENCH_MAX_FAILURE_RATE", "0")))
     parser.add_argument("--json-output", default=os.getenv("AUTHCLAW_BENCH_JSON_OUTPUT", ""))
     parser.add_argument("--skip-health", action="store_true")
@@ -320,21 +335,37 @@ def resolve_scenarios(raw: str, allow_hitl: bool) -> list[Scenario]:
     return [SCENARIOS[name] for name in names]
 
 
+def attach_overhead_reports(reports: list[ScenarioReport], baselines: dict[str, ScenarioReport]) -> None:
+    for report in reports:
+        baseline = baselines.get(report.scenario)
+        if baseline:
+            report.provider_baseline_p95_ms = baseline.p95_ms
+            report.gateway_overhead_p50_ms = max(0.0, report.p50_ms - baseline.p50_ms)
+            report.gateway_overhead_p95_ms = max(0.0, report.p95_ms - baseline.p95_ms)
+            report.gateway_overhead_p99_ms = max(0.0, report.p99_ms - baseline.p99_ms)
+        elif not SCENARIOS[report.scenario].calls_provider:
+            report.gateway_overhead_p50_ms = report.p50_ms
+            report.gateway_overhead_p95_ms = report.p95_ms
+            report.gateway_overhead_p99_ms = report.p99_ms
+
+
 def print_report(reports: list[ScenarioReport]) -> None:
     print("\nAuthClaw Gateway Latency Benchmark")
-    print("=" * 105)
+    print("=" * 126)
     print(
         f"{'scenario':<12} {'req':>5} {'ok':>5} {'fail':>5} {'rps':>8} "
-        f"{'p50':>9} {'p95':>9} {'p99':>9} {'ttfb95':>9} {'max':>9} {'statuses':>18}"
+        f"{'p50':>9} {'p95':>9} {'p99':>9} {'ttfb95':>9} {'over95':>9} {'base95':>9} {'max':>9} {'statuses':>18}"
     )
-    print("-" * 105)
+    print("-" * 126)
     for report in reports:
         statuses = ",".join(f"{code}:{count}" for code, count in sorted(report.status_counts.items()))
+        overhead_p95 = f"{report.gateway_overhead_p95_ms:.1f}ms" if report.gateway_overhead_p95_ms is not None else "n/a"
+        baseline_p95 = f"{report.provider_baseline_p95_ms:.1f}ms" if report.provider_baseline_p95_ms is not None else "n/a"
         print(
             f"{report.scenario:<12} {report.requests:>5} {report.successes:>5} {report.failures:>5} "
             f"{report.throughput_rps:>8.1f} {report.p50_ms:>8.1f}ms {report.p95_ms:>8.1f}ms "
             f"{report.p99_ms:>8.1f}ms {report.first_byte_p95_ms:>8.1f}ms "
-            f"{report.max_ms:>8.1f}ms {statuses:>18}"
+            f"{overhead_p95:>9} {baseline_p95:>9} {report.max_ms:>8.1f}ms {statuses:>18}"
         )
         for error in report.errors:
             print(f"  error[{report.scenario}]: {error}")
@@ -376,17 +407,42 @@ def main() -> int:
         )
         for scenario in scenarios
     ]
+    baseline_reports: dict[str, ScenarioReport] = {}
+    if args.provider_baseline_url:
+        baseline_reports = {
+            scenario.name: run_scenario(
+                Scenario(
+                    name=scenario.name,
+                    prompt=scenario.prompt,
+                    expected_statuses=(200,),
+                    stream=scenario.stream,
+                ),
+                gateway_url=args.provider_baseline_url,
+                api_key=args.api_key,
+                provider=args.provider,
+                model=args.model,
+                requests=args.requests,
+                concurrency=args.concurrency,
+                timeout_seconds=args.timeout_seconds,
+            )
+            for scenario in scenarios
+            if scenario.calls_provider
+        }
+    attach_overhead_reports(reports, baseline_reports)
 
     print_report(reports)
 
     payload = {
         "gateway_url": args.gateway_url,
+        "provider_baseline_url": args.provider_baseline_url,
         "provider": args.provider,
         "model": args.model,
         "requests_per_scenario": args.requests,
         "concurrency": args.concurrency,
         "p95_threshold_ms": args.p95_threshold_ms,
         "p99_threshold_ms": args.p99_threshold_ms,
+        "overhead_p95_threshold_ms": args.overhead_p95_threshold_ms,
+        "transform_overhead_p95_threshold_ms": args.transform_overhead_p95_threshold_ms,
         "reports": [asdict(report) for report in reports],
     }
     if args.json_output:
@@ -395,6 +451,11 @@ def main() -> int:
             fh.write("\n")
 
     failed = False
+    for baseline in baseline_reports.values():
+        failure_rate = baseline.failures / baseline.requests if baseline.requests else 1
+        if failure_rate > args.max_failure_rate:
+            print(f"FAIL: provider baseline {baseline.scenario} failure rate {failure_rate:.2%} exceeds {args.max_failure_rate:.2%}")
+            failed = True
     for report in reports:
         failure_rate = report.failures / report.requests if report.requests else 1
         if failure_rate > args.max_failure_rate:
@@ -406,6 +467,16 @@ def main() -> int:
         if report.p99_ms > args.p99_threshold_ms:
             print(f"FAIL: {report.scenario} p99 {report.p99_ms:.1f}ms exceeds {args.p99_threshold_ms:.1f}ms")
             failed = True
+        if args.provider_baseline_url and report.gateway_overhead_p95_ms is not None:
+            overhead_limit = args.overhead_p95_threshold_ms
+            if report.scenario not in ("allow", "block"):
+                overhead_limit = args.transform_overhead_p95_threshold_ms
+            if report.gateway_overhead_p95_ms > overhead_limit:
+                print(
+                    f"FAIL: {report.scenario} gateway overhead p95 "
+                    f"{report.gateway_overhead_p95_ms:.1f}ms exceeds {overhead_limit:.1f}ms"
+                )
+                failed = True
 
     if failed:
         return 1
