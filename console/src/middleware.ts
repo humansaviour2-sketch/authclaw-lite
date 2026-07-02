@@ -7,7 +7,13 @@ export function middleware(request: NextRequest) {
   const demoBlockedPaths = ["/frameworks", "/evidence", "/findings", "/aws"];
   
   // 1. Define public and asset paths
-  const isPublicPath = path === "/login" || path === "/signup" || path.startsWith("/trust-center") || path.startsWith("/api/auth");
+  const isPublicPath =
+    path === "/" ||
+    path === "/authclaw-home.html" ||
+    path === "/login" ||
+    path === "/signup" ||
+    path.startsWith("/trust-center") ||
+    path.startsWith("/api/auth");
   const isAssetPath =
     path.startsWith("/_next") ||
     path.startsWith("/favicon.ico") ||
@@ -40,11 +46,6 @@ export function middleware(request: NextRequest) {
   }
 
   if (sessionCookie && path === "/signup") {
-    return NextResponse.redirect(new URL("/connect", request.url));
-  }
-
-  if (sessionCookie && path === "/") {
-    // Redirect root to the demo onboarding flow
     return NextResponse.redirect(new URL("/connect", request.url));
   }
 

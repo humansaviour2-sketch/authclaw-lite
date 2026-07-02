@@ -8,6 +8,22 @@ Follow these steps in order using separate terminal windows (or tabs) from the r
 
 Make sure Docker Desktop is running before starting these steps.
 
+## Local Compose Modes
+
+AuthClaw now has two local compose modes:
+
+- Lite demo: `docker-compose.demo.yml` starts the smaller onboarding-focused stack with demo UI mode enabled.
+- Full local: `docker-compose.full.yml` starts backend, gateway, console, Postgres, Redis, OPA, Presidio, Kafka, ClickHouse, and the audit consumer with `NEXT_PUBLIC_AUTHCLAW_DEMO_MODE=false`.
+
+Use full local mode for serious feature testing and SRS gap closure:
+
+```powershell
+docker compose -f docker-compose.demo.yml down
+docker compose -f docker-compose.full.yml up -d --build
+```
+
+The full local UI is available at `http://localhost:3001`, with the backend at `http://localhost:8000` and gateway at `http://localhost:8080`.
+
 ## 1. Start Infrastructure (Docker)
 
 AuthClaw relies on several containers for its databases, message brokers, and policy engines.

@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AuthClaw — The runtime layer for AI compliance</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --navy-950:#08152B; --navy-900:#0B1F3F; --navy-800:#12294B; --navy-700:#1B3663;
+  --ink:#0E1726; --slate:#475069; --mute:#6B7488; --line:#E6E9F0; --line-2:#EEF1F6;
+  --paper:#FBFAF9; --paper-2:#F5F7FA; --white:#FFFFFF;
+  --violet:#6D28D9; --violet-500:#7C3AED; --violet-300:#A78BFA; --violet-050:#F1ECFE;
+  --gold:#E9A93C; --gold-600:#C9862A; --gold-050:#FBF1DE;
+  --ok:#1E7A46;
+  --r-lg:20px; --r-md:14px; --r-sm:10px;
+  --shadow:0 1px 2px rgba(11,31,63,.05), 0 12px 30px -12px rgba(11,31,63,.18);
+  --shadow-soft:0 1px 2px rgba(11,31,63,.04), 0 8px 22px -14px rgba(11,31,63,.14);
+  --maxw:1180px;
+  --font-d:"Space Grotesk",system-ui,sans-serif;
+  --font-b:"Inter",system-ui,sans-serif;
+  --font-m:"IBM Plex Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font-family:var(--font-b);color:var(--ink);background:var(--paper);
+  -webkit-font-smoothing:antialiased;line-height:1.55;font-size:16.5px}
+a{color:inherit;text-decoration:none}
+h1,h2,h3,h4{font-family:var(--font-d);margin:0;line-height:1.08;letter-spacing:-.02em;font-weight:600}
+p{margin:0}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+.eyebrow{font-family:var(--font-m);font-size:12px;letter-spacing:.18em;text-transform:uppercase;
+  font-weight:500;color:var(--violet)}
+.btn{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-d);font-weight:500;
+  font-size:15px;padding:13px 22px;border-radius:var(--r-sm);border:1px solid transparent;
+  cursor:pointer;transition:transform .15s ease, box-shadow .2s ease, background .2s ease, border-color .2s}
+.btn-primary{background:var(--violet);color:#fff;box-shadow:0 8px 20px -8px rgba(109,40,217,.6)}
+.btn-primary:hover{background:var(--violet-500);transform:translateY(-1px)}
+.btn-ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+.btn-ghost:hover{border-color:var(--violet-300);color:var(--violet)}
+.btn-light{background:rgba(255,255,255,.08);color:#fff;border-color:rgba(255,255,255,.22)}
+.btn-light:hover{background:rgba(255,255,255,.16)}
+.btn-gold{background:var(--gold);color:#2A1B04}
+.btn-gold:hover{background:#f2b653;transform:translateY(-1px)}
+
+/* ---------- announcement ---------- */
+.topstrip{background:var(--navy-950);color:#D7E0F2;font-size:13px;text-align:center;
+  padding:8px 16px;font-family:var(--font-m);letter-spacing:.02em}
+.topstrip b{color:#fff;font-weight:600}
+.topstrip .dot{color:var(--gold);margin:0 10px}
+
+/* ---------- nav ---------- */
+header.nav{position:sticky;top:0;z-index:60;background:rgba(251,250,249,.82);
+  backdrop-filter:saturate(160%) blur(12px);border-bottom:1px solid var(--line)}
+.nav-in{display:flex;align-items:center;gap:28px;height:66px}
+.brand{display:flex;align-items:center;gap:11px;font-family:var(--font-d);font-weight:700;
+  font-size:20px;letter-spacing:-.03em;color:var(--ink)}
+.mark{width:30px;height:30px;border-radius:8px;position:relative;flex:none;
+  background:linear-gradient(135deg,var(--violet) 0%,var(--navy-700) 100%);overflow:hidden}
+.mark::before{content:"";position:absolute;inset:0;
+  background:
+   linear-gradient(135deg,transparent 46%,rgba(255,255,255,.92) 47%,rgba(255,255,255,.92) 53%,transparent 54%),
+   linear-gradient(45deg,transparent 62%,var(--gold) 63%,var(--gold) 70%,transparent 71%)}
+.brand .ai{color:var(--violet)}
+nav.links{display:flex;gap:26px;margin-left:8px}
+nav.links a{font-size:15px;color:var(--slate);font-weight:500;padding:6px 0;position:relative}
+nav.links a:hover{color:var(--ink)}
+nav.links a::after{content:"";position:absolute;left:0;right:100%;bottom:-2px;height:2px;
+  background:var(--violet);transition:right .25s ease}
+nav.links a:hover::after{right:0}
+.nav-cta{margin-left:auto;display:flex;align-items:center;gap:14px}
+.nav-cta .login{font-size:15px;font-weight:500;color:var(--slate)}
+.nav-cta .login:hover{color:var(--ink)}
+.burger{display:none;background:none;border:1px solid var(--line);border-radius:8px;
+  width:42px;height:38px;cursor:pointer;align-items:center;justify-content:center}
+.burger span{display:block;width:18px;height:2px;background:var(--ink);position:relative}
+.burger span::before,.burger span::after{content:"";position:absolute;left:0;width:18px;height:2px;background:var(--ink)}
+.burger span::before{top:-6px}.burger span::after{top:6px}
+
+/* ---------- hero ---------- */
+.hero{position:relative;overflow:hidden;
+  background:
+    radial-gradient(1100px 520px at 78% -8%, rgba(109,40,217,.10), transparent 60%),
+    radial-gradient(760px 460px at 6% 8%, rgba(233,169,60,.09), transparent 55%),
+    var(--paper)}
+.hero-in{display:grid;grid-template-columns:1.02fr .98fr;gap:52px;align-items:center;
+  padding:74px 0 84px}
+.hero h1{font-size:clamp(38px,5vw,60px);font-weight:700;margin:18px 0 0}
+.hero h1 .hl{position:relative;white-space:nowrap;color:var(--violet)}
+.hero h1 .hl::after{content:"";position:absolute;left:-2px;right:-2px;bottom:.06em;height:.28em;
+  background:linear-gradient(90deg,var(--gold-050),var(--gold-050));z-index:-1;border-radius:3px}
+.hero .sub{font-size:19px;color:var(--slate);margin-top:22px;max-width:560px}
+.hero .cta-row{display:flex;gap:14px;margin-top:30px;flex-wrap:wrap}
+.trust{margin-top:38px}
+.trust .t-label{font-family:var(--font-m);font-size:11.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--mute)}
+.badge-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.fw{font-family:var(--font-d);font-weight:600;font-size:12.5px;letter-spacing:.02em;
+  padding:7px 13px;border-radius:999px;background:#fff;border:1px solid var(--line);color:var(--navy-800)}
+
+/* ---------- hero gateway visual (signature) ---------- */
+.gw{background:linear-gradient(180deg,var(--navy-900),var(--navy-950));border-radius:var(--r-lg);
+  border:1px solid rgba(255,255,255,.08);box-shadow:0 30px 60px -24px rgba(8,21,43,.6);
+  padding:20px;color:#E7EDF9;position:relative}
+.gw-bar{display:flex;align-items:center;gap:7px;padding:2px 4px 14px}
+.gw-bar i{width:11px;height:11px;border-radius:50%;background:#37456B;display:block}
+.gw-bar i.g{background:var(--gold)}
+.gw-title{margin-left:8px;font-family:var(--font-m);font-size:12px;color:#8FA0C4;letter-spacing:.03em}
+.gw-flow{display:flex;flex-direction:column;gap:0}
+.node{border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:13px 15px;
+  background:rgba(255,255,255,.03)}
+.node .nlabel{font-family:var(--font-m);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:#7E8FB6;margin-bottom:7px;display:flex;justify-content:space-between}
+.code{font-family:var(--font-m);font-size:13px;line-height:1.7;word-break:break-word}
+.tok{color:#C9D4EC}
+.pii{background:rgba(233,169,60,.16);color:#F4C877;border-radius:4px;padding:1px 5px;
+  transition:all .4s ease}
+.pii.masked{background:rgba(109,40,217,.28);color:#C6B0F5;letter-spacing:.02em}
+.arrow{align-self:center;color:#54648A;font-size:18px;padding:4px 0;line-height:1}
+.gwcore{border-color:rgba(124,58,237,.45);background:
+   linear-gradient(180deg,rgba(124,58,237,.14),rgba(124,58,237,.05))}
+.gwcore .nlabel{color:var(--violet-300)}
+.gw-chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.chip{font-family:var(--font-m);font-size:11px;padding:5px 9px;border-radius:6px;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.10);color:#B9C6E2}
+.chip.ok{color:#9BE7BD;border-color:rgba(30,122,70,.45);background:rgba(30,122,70,.14)}
+.chip.v{color:#C6B0F5;border-color:rgba(124,58,237,.4);background:rgba(124,58,237,.14)}
+.lat{position:absolute;top:16px;right:16px;font-family:var(--font-m);font-size:11px;
+  color:#9BE7BD;background:rgba(30,122,70,.16);border:1px solid rgba(30,122,70,.4);
+  padding:4px 9px;border-radius:999px}
+
+/* ---------- section scaffolding ---------- */
+section{position:relative}
+.band{padding:86px 0}
+.band-tight{padding:64px 0}
+.sec-head{max-width:720px}
+.sec-head h2{font-size:clamp(28px,3.4vw,42px);font-weight:700;margin-top:14px}
+.sec-head .sub{color:var(--slate);font-size:18px;margin-top:16px}
+.center{margin-left:auto;margin-right:auto;text-align:center}
+
+/* positioning contrast strip */
+.contrast{background:var(--navy-900);color:#EAF0FB}
+.contrast .wrap{display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:center}
+.contrast h2{color:#fff;font-size:clamp(26px,3.2vw,38px)}
+.contrast .lead{font-size:20px;color:#B9C6E2;margin-top:18px}
+.contrast .k{color:var(--gold);font-weight:600}
+.contrast .kv{color:var(--violet-300);font-weight:600}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:rgba(255,255,255,.10);
+  border:1px solid rgba(255,255,255,.10);border-radius:var(--r-md);overflow:hidden}
+.stat{background:var(--navy-900);padding:26px 24px}
+.stat .n{font-family:var(--font-d);font-size:34px;font-weight:700;color:#fff}
+.stat .n .u{font-size:18px;color:var(--violet-300)}
+.stat .l{font-size:14px;color:#96A4C6;margin-top:6px}
+
+/* pillars */
+.pillars{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:46px}
+.pcard{background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);padding:28px;
+  box-shadow:var(--shadow-soft);transition:transform .2s ease, box-shadow .25s ease;position:relative;overflow:hidden}
+.pcard:hover{transform:translateY(-4px);box-shadow:var(--shadow)}
+.pcard .pnum{font-family:var(--font-m);font-size:12px;color:var(--mute);letter-spacing:.1em}
+.picon{width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+  margin:14px 0 16px;background:var(--violet-050);color:var(--violet)}
+.pcard h3{font-size:21px;font-weight:600}
+.pcard p{color:var(--slate);font-size:15.5px;margin-top:10px}
+.pcard .top-accent{position:absolute;left:0;right:0;top:0;height:3px;
+  background:linear-gradient(90deg,var(--violet),var(--gold))}
+
+/* how it works */
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-top:44px}
+.step{position:relative;padding-top:24px}
+.step .sn{font-family:var(--font-d);font-weight:700;font-size:15px;color:#fff;
+  width:34px;height:34px;border-radius:9px;background:var(--navy-800);display:flex;
+  align-items:center;justify-content:center}
+.step h4{font-size:18px;margin-top:16px;font-weight:600}
+.step p{color:var(--slate);font-size:15px;margin-top:8px}
+.step::before{content:"";position:absolute;top:15px;left:44px;right:-10px;height:2px;
+  background:linear-gradient(90deg,var(--line),transparent);border-radius:2px}
+.step:last-child::before{display:none}
+
+/* modules alternating */
+.module{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center;padding:40px 0}
+.module.rev .m-copy{order:2}
+.module .eyebrow{color:var(--gold-600)}
+.module h3{font-size:clamp(24px,2.8vw,32px);font-weight:600;margin-top:12px}
+.module p.md{color:var(--slate);font-size:17px;margin-top:14px}
+.mlist{list-style:none;padding:0;margin:20px 0 0;display:grid;gap:11px}
+.mlist li{display:flex;gap:11px;align-items:flex-start;font-size:15.5px;color:var(--ink)}
+.mlist li .tk{color:var(--violet);flex:none;margin-top:2px}
+.m-visual{background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);
+  box-shadow:var(--shadow-soft);padding:22px;min-height:230px}
+.mv-head{display:flex;align-items:center;justify-content:space-between;
+  font-family:var(--font-m);font-size:12px;color:var(--mute);
+  border-bottom:1px solid var(--line-2);padding-bottom:12px;margin-bottom:14px}
+.dotpill{width:9px;height:9px;border-radius:50%;background:var(--ok);display:inline-block;margin-right:6px}
+.rowline{display:flex;align-items:center;justify-content:space-between;padding:10px 0;
+  border-bottom:1px dashed var(--line-2);font-size:14px}
+.rowline:last-child{border-bottom:0}
+.pill{font-family:var(--font-m);font-size:11px;padding:4px 9px;border-radius:999px}
+.pill.wait{background:var(--gold-050);color:var(--gold-600)}
+.pill.appr{background:#E7F5EC;color:var(--ok)}
+.pill.block{background:#FBECEC;color:#B4402F}
+.meter{height:10px;border-radius:999px;background:var(--paper-2);overflow:hidden;border:1px solid var(--line-2)}
+.meter i{display:block;height:100%;background:linear-gradient(90deg,var(--violet),var(--violet-300))}
+.scorecard{display:grid;gap:14px}
+.scorecard .srow .top{display:flex;justify-content:space-between;font-size:14px;margin-bottom:6px}
+.scorecard .srow .top b{font-family:var(--font-d)}
+
+/* logos / frameworks band */
+.rail{background:var(--paper-2);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.rail .grid2{display:grid;grid-template-columns:1fr 1fr;gap:40px}
+.rail h4{font-size:15px;font-family:var(--font-d);color:var(--ink);margin-bottom:16px}
+.taglist{display:flex;flex-wrap:wrap;gap:10px}
+.tag{font-family:var(--font-d);font-weight:500;font-size:14px;padding:9px 15px;border-radius:10px;
+  background:#fff;border:1px solid var(--line);color:var(--navy-800)}
+.tag .d{color:var(--violet);margin-right:7px}
+
+/* comparison */
+.cmp{width:100%;border-collapse:separate;border-spacing:0;margin-top:40px;
+  background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;box-shadow:var(--shadow-soft)}
+.cmp th,.cmp td{padding:17px 22px;text-align:left;font-size:15.5px;border-bottom:1px solid var(--line-2)}
+.cmp thead th{font-family:var(--font-d);font-weight:600;font-size:14px;background:var(--paper-2)}
+.cmp thead th.us{background:var(--navy-900);color:#fff}
+.cmp td.us{color:var(--ink);font-weight:500;background:rgba(109,40,217,.03)}
+.cmp td.them{color:var(--mute)}
+.cmp tr:last-child td{border-bottom:0}
+.cmp td:first-child{font-family:var(--font-d);font-weight:600;color:var(--navy-800);font-size:14.5px}
+
+/* testimonials */
+.quotes{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:44px}
+.quote{background:#fff;border:1px solid var(--line);border-radius:var(--r-lg);padding:30px;
+  box-shadow:var(--shadow-soft)}
+.quote .mark{position:static;width:auto;height:auto;background:none;font-family:var(--font-d);
+  font-size:40px;color:var(--violet-300);line-height:.6}
+.quote .mark::before{display:none}
+.quote p{font-size:18px;color:var(--ink);margin-top:8px;font-weight:500;line-height:1.5}
+.quote .who{margin-top:20px;font-size:14px;color:var(--slate)}
+.quote .who b{color:var(--ink);font-family:var(--font-d);font-weight:600}
+
+/* final cta */
+.finalcta{background:
+   radial-gradient(700px 300px at 80% 0%,rgba(233,169,60,.16),transparent 60%),
+   linear-gradient(180deg,var(--navy-900),var(--navy-950));color:#fff}
+.finalcta .wrap{text-align:center;padding:88px 24px}
+.finalcta h2{font-size:clamp(30px,4vw,48px);font-weight:700}
+.finalcta p{color:#B9C6E2;font-size:19px;margin-top:16px}
+.finalcta .cta-row{display:flex;gap:14px;justify-content:center;margin-top:30px;flex-wrap:wrap}
+.appgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:34px;text-align:left}
+.appcard{display:block;border:1px solid rgba(255,255,255,.14);border-radius:var(--r-sm);
+  background:rgba(255,255,255,.06);padding:16px;color:#EAF0FB;transition:transform .15s ease, border-color .2s ease, background .2s ease}
+.appcard:hover{transform:translateY(-2px);border-color:var(--violet-300);background:rgba(255,255,255,.10)}
+.appcard b{display:block;font-family:var(--font-d);font-size:15px;color:#fff}
+.appcard span{display:block;color:#B9C6E2;font-size:13px;margin-top:5px}
+.appstatus{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:18px}
+.appstatus .chip{background:rgba(255,255,255,.08)}
+
+/* footer */
+footer.ft{background:var(--navy-950);color:#AFBBD6;padding:64px 0 30px;font-size:14.5px}
+.ft-grid{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr 1fr;gap:32px}
+.ft .brand{color:#fff;margin-bottom:14px}
+.ft .brand .ai{color:var(--violet-300)}
+.ft p.desc{color:#8291B0;max-width:280px;font-size:14px}
+.ft h5{font-family:var(--font-d);font-size:13px;letter-spacing:.06em;text-transform:uppercase;
+  color:#6E7EA0;margin:0 0 14px}
+.ft ul{list-style:none;padding:0;margin:0;display:grid;gap:9px}
+.ft ul a{color:#AFBBD6}.ft ul a:hover{color:#fff}
+.ft-base{border-top:1px solid rgba(255,255,255,.09);margin-top:44px;padding-top:22px;
+  display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;color:#7787A6;font-size:13.5px}
+.ft-base .made b{color:var(--gold)}
+
+/* reveal */
+.reveal{opacity:0;transform:translateY(18px);transition:opacity .6s ease, transform .6s ease}
+.reveal.in{opacity:1;transform:none}
+
+/* responsive */
+@media (max-width:940px){
+  .hero-in{grid-template-columns:1fr;gap:40px;padding:52px 0 60px}
+  .gw{order:-1}
+  .contrast .wrap{grid-template-columns:1fr;gap:30px}
+  .pillars{grid-template-columns:1fr}
+  .steps{grid-template-columns:1fr 1fr}
+  .step::before{display:none}
+  .module,.module.rev .m-copy{grid-template-columns:1fr;order:0}
+  .module{gap:26px}
+  .rail .grid2{grid-template-columns:1fr;gap:26px}
+  .quotes{grid-template-columns:1fr}
+  .ft-grid{grid-template-columns:1fr 1fr}
+  .appgrid{grid-template-columns:1fr 1fr}
+  nav.links,.nav-cta .login{display:none}
+  .burger{display:flex;margin-left:auto}
+  .nav-cta{margin-left:0}
+}
+@media (max-width:980px){
+  .hero-in{grid-template-columns:1fr;gap:40px;padding:52px 0 60px}
+  .gw{order:-1}
+  nav.links,.nav-cta .login{display:none}
+  .burger{display:flex;margin-left:auto}
+  .nav-cta{margin-left:0}
+}
+@media (max-width:560px){
+  .steps{grid-template-columns:1fr}
+  .stat-grid{grid-template-columns:1fr}
+  .cmp thead{display:none}
+  .cmp td{display:block;border-bottom:0;padding:10px 18px}
+  .cmp tr{display:block;border-bottom:1px solid var(--line-2);padding:8px 0}
+  .cmp td:first-child{padding-top:16px}
+  .ft-grid{grid-template-columns:1fr 1fr}
+  .appgrid{grid-template-columns:1fr}
+}
+.mobilemenu{display:none}
+.mobilemenu.open{display:block;border-bottom:1px solid var(--line);background:var(--paper)}
+.mobilemenu a{display:block;padding:13px 24px;border-top:1px solid var(--line-2);color:var(--slate);font-weight:500}
+.mobilemenu .mm-cta{padding:16px 24px;display:flex;gap:12px}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+  .reveal{opacity:1;transform:none}
+}
+</style>
+</head>
+<body>
+
+<div class="topstrip">
+  <b>AuthClaw</b> is the live gateway for AI compliance
+  <span class="dot">•</span> SOC 2 <span class="dot">·</span> HIPAA <span class="dot">·</span> GDPR <span class="dot">·</span> ISO 42001 ready
+</div>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top"><span class="mark"></span>AuthClaw<span class="ai">.ai</span></a>
+    <nav class="links">
+      <a href="#platform">Platform</a>
+      <a href="#how">How it works</a>
+      <a href="#modules">Product</a>
+      <a href="#frameworks">Frameworks</a>
+      <a href="#why">Why AuthClaw</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="login" href="/login">Log in</a>
+      <a class="btn btn-primary" href="/signup">Book a demo</a>
+      <button class="burger" id="burger" aria-label="Menu"><span></span></button>
+    </div>
+  </div>
+  <div class="mobilemenu" id="mm">
+    <a href="#platform">Platform</a>
+    <a href="#how">How it works</a>
+    <a href="#modules">Product</a>
+    <a href="#frameworks">Frameworks</a>
+    <a href="#why">Why AuthClaw</a>
+    <div class="mm-cta"><a class="btn btn-ghost" href="/login">Log in</a><a class="btn btn-primary" href="/signup">Book a demo</a></div>
+  </div>
+</header>
+
+<main id="top">
+
+<!-- HERO -->
+<section class="hero" id="platform">
+  <div class="wrap hero-in">
+    <div class="h-copy">
+      <span class="eyebrow">The runtime layer for AI compliance</span>
+      <h1>Stop sensitive data <span class="hl">before</span> it reaches the model.</h1>
+      <p class="sub">AuthClaw sits in the live path between your applications and AI. It removes PII and PHI in real time, fixes compliance gaps with human approval, and keeps a tamper-proof record your auditors can trust.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="/signup">Book a demo</a>
+        <a class="btn btn-ghost" href="#how">See how it works</a>
+      </div>
+      <div class="trust">
+        <div class="t-label">Built for teams shipping AI in regulated environments</div>
+        <div class="badge-row">
+          <span class="fw">SOC 2</span><span class="fw">HIPAA</span><span class="fw">GDPR</span>
+          <span class="fw">ISO 42001</span><span class="fw">EU AI Act</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- signature: live gateway -->
+    <div class="gw" aria-label="Live redaction gateway demonstration">
+      <div class="lat" id="lat">+38ms</div>
+      <div class="gw-bar"><i></i><i></i><i class="g"></i><span class="gw-title">authclaw · in-line gateway</span></div>
+      <div class="gw-flow">
+        <div class="node">
+          <div class="nlabel"><span>Inbound prompt</span><span>app → authclaw</span></div>
+          <div class="code" id="inNode">
+            <span class="tok">summarize the chart for patient </span><span class="pii" data-real="Priya Nair">Priya Nair</span><span class="tok">, dob </span><span class="pii" data-real="04/12/1986">04/12/1986</span><span class="tok">, mrn </span><span class="pii" data-real="8830-221">8830-221</span>
+          </div>
+        </div>
+        <div class="arrow">↓</div>
+        <div class="node gwcore">
+          <div class="nlabel"><span>AuthClaw</span><span>redact · enforce · log</span></div>
+          <div class="gw-chips">
+            <span class="chip v">Presidio + NER</span>
+            <span class="chip v">policy: PHI-block</span>
+            <span class="chip ok">audit ✓ chained</span>
+          </div>
+        </div>
+        <div class="arrow">↓</div>
+        <div class="node">
+          <div class="nlabel"><span>Forwarded to model</span><span>authclaw → provider</span></div>
+          <div class="code" id="outNode">
+            <span class="tok">summarize the chart for patient </span><span class="pii masked">[NAME]</span><span class="tok">, dob </span><span class="pii masked">[DATE]</span><span class="tok">, mrn </span><span class="pii masked">[ID]</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CONTRAST / POSITIONING -->
+<section class="contrast band-tight">
+  <div class="wrap">
+    <div class="reveal">
+      <span class="eyebrow" style="color:var(--violet-300)">Posture tools prove yesterday</span>
+      <h2>Most compliance tools tell you what happened. <span class="kv">AuthClaw acts on every request</span>, right now.</h2>
+      <p class="lead">Dashboards and audits describe your posture after the fact. AuthClaw is the enforcement point: it inspects each call to a model, strips what should never leave, and blocks what breaks your rules, before anything reaches an external provider.</p>
+    </div>
+    <div class="stat-grid reveal">
+      <div class="stat"><div class="n">&lt;50<span class="u">ms</span></div><div class="l">added latency per request</div></div>
+      <div class="stat"><div class="n">99.99<span class="u">%</span></div><div class="l">uptime target, multi-region</div></div>
+      <div class="stat"><div class="n">100<span class="u">%</span></div><div class="l">of prompts and responses inspected</div></div>
+      <div class="stat"><div class="n">1<span class="u">-click</span></div><div class="l">verifiable audit export</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- PILLARS -->
+<section class="band">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">One gateway, three jobs</span>
+      <h2>Everything AI touches, governed in one place.</h2>
+      <p class="sub">AuthClaw runs as a single in-line service. It protects data on the way out, fixes the gaps it finds, and records proof of both.</p>
+    </div>
+    <div class="pillars">
+      <div class="pcard reveal">
+        <div class="top-accent"></div>
+        <div class="pnum">01 / Gateway</div>
+        <div class="picon">▤</div>
+        <h3>The checkpoint</h3>
+        <p>Every prompt and response passes through AuthClaw first. Sensitive data is detected and masked, hashed, or replaced before it leaves your environment. Rules block anything that should never be sent.</p>
+      </div>
+      <div class="pcard reveal">
+        <div class="top-accent"></div>
+        <div class="pnum">02 / Agent</div>
+        <div class="picon">◈</div>
+        <h3>The remediation agent</h3>
+        <p>An AI agent scans your cloud, explains in plain language where you fall short of GDPR, HIPAA, and SOC 2, and prepares the fix. Nothing risky runs until a person approves it, with a security check.</p>
+      </div>
+      <div class="pcard reveal">
+        <div class="top-accent"></div>
+        <div class="pnum">03 / Audit</div>
+        <div class="picon">⛭</div>
+        <h3>The audit recorder</h3>
+        <p>Every request, decision, and approval is written to a tamper-proof, hash-chained log. Export verifiable evidence for auditors and customers, or publish a live trust page, in one click.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section class="band-tight" id="how" style="background:var(--paper-2);border-top:1px solid var(--line);border-bottom:1px solid var(--line)">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">The request lifecycle</span>
+      <h2>Four steps, on every call.</h2>
+    </div>
+    <div class="steps">
+      <div class="step reveal"><div class="sn">1</div><h4>Intercept</h4><p>Requests reach the gateway over HTTPS or gRPC, native provider format preserved.</p></div>
+      <div class="step reveal"><div class="sn">2</div><h4>Redact and enforce</h4><p>Presidio and NER strip sensitive data. Policy rules block traffic that breaks your standards.</p></div>
+      <div class="step reveal"><div class="sn">3</div><h4>Forward</h4><p>The clean payload goes to OpenAI, Anthropic, Azure, or Cohere with nothing sensitive attached.</p></div>
+      <div class="step reveal"><div class="sn">4</div><h4>Record</h4><p>A hash-chained audit entry is written for the request, the response, and every decision made.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- MODULES -->
+<section class="band" id="modules">
+  <div class="wrap">
+    <div class="sec-head center reveal">
+      <span class="eyebrow">The platform</span>
+      <h2>Four products. One in-line service.</h2>
+    </div>
+
+    <div class="module reveal">
+      <div class="m-copy">
+        <span class="eyebrow">In-line gateway</span>
+        <h3>A safe path to every model.</h3>
+        <p class="md">Reverse-proxy the major providers without changing your API calls. AuthClaw redacts in real time and holds the line on policy, even on streaming responses, token by token.</p>
+        <ul class="mlist">
+          <li><span class="tk">▸</span> Multi-model proxy for OpenAI, Anthropic, Azure OpenAI, and Cohere</li>
+          <li><span class="tk">▸</span> Masking, salted hashing, or synthetic replacement per field</li>
+          <li><span class="tk">▸</span> Policy-as-code with topic and pattern blocking</li>
+        </ul>
+      </div>
+      <div class="m-visual">
+        <div class="mv-head"><span><span class="dotpill"></span>gateway · live traffic</span><span>redaction on</span></div>
+        <div class="rowline"><span>prompt · support-bot</span><span class="pill appr">2 fields masked</span></div>
+        <div class="rowline"><span>prompt · billing-agent</span><span class="pill block">blocked · card number</span></div>
+        <div class="rowline"><span>response · claims-llm</span><span class="pill appr">clean</span></div>
+        <div class="rowline"><span>prompt · intake-form</span><span class="pill appr">1 field hashed</span></div>
+      </div>
+    </div>
+
+    <div class="module rev reveal">
+      <div class="m-copy">
+        <span class="eyebrow">Agentic remediation</span>
+        <h3>The agent proposes. A human decides.</h3>
+        <p class="md">The remediation agent finds gaps, drafts the exact change as a Terraform or CLI diff, and waits. Consequential actions sit in an approval state, expire if untouched, and only run after a person clears a security check.</p>
+        <ul class="mlist">
+          <li><span class="tk">▸</span> Orchestrator with short-lived, scoped workers</li>
+          <li><span class="tk">▸</span> Human approval with MFA on every change</li>
+          <li><span class="tk">▸</span> Approvals expire automatically after 30 minutes</li>
+        </ul>
+      </div>
+      <div class="m-visual">
+        <div class="mv-head"><span><span class="dotpill" style="background:var(--gold)"></span>remediation · pending</span><span>1 awaiting approval</span></div>
+        <div class="rowline"><span>Restrict S3 bucket policy</span><span class="pill wait">awaiting approval</span></div>
+        <div class="rowline"><span>Rotate exposed API key</span><span class="pill appr">approved · applied</span></div>
+        <div class="rowline"><span>Enable audit logging</span><span class="pill appr">approved · applied</span></div>
+        <div class="rowline"><span>Delete public snapshot</span><span class="pill wait">needs MFA</span></div>
+      </div>
+    </div>
+
+    <div class="module reveal">
+      <div class="m-copy">
+        <span class="eyebrow">Continuous audit &amp; trust center</span>
+        <h3>Proof that cannot be quietly changed.</h3>
+        <p class="md">Every action lands in an append-only log, each entry chained to the last with a SHA-256 hash. Export a signed evidence bundle for an auditor, or publish a live trust page for buyers, without assembling anything by hand.</p>
+        <ul class="mlist">
+          <li><span class="tk">▸</span> Tamper-evident, hash-chained records</li>
+          <li><span class="tk">▸</span> Cryptographically verifiable export</li>
+          <li><span class="tk">▸</span> Buyer-ready trust center, always current</li>
+        </ul>
+      </div>
+      <div class="m-visual">
+        <div class="mv-head"><span><span class="dotpill"></span>audit trail · verified</span><span>chain intact</span></div>
+        <div class="rowline"><span class="code" style="font-size:12.5px">#4471 · redaction · gateway</span><span class="pill appr">✓ hash</span></div>
+        <div class="rowline"><span class="code" style="font-size:12.5px">#4472 · approval · user</span><span class="pill appr">✓ hash</span></div>
+        <div class="rowline"><span class="code" style="font-size:12.5px">#4473 · execute · agent</span><span class="pill appr">✓ hash</span></div>
+        <div class="rowline"><span class="code" style="font-size:12.5px">#4474 · export · SOC 2</span><span class="pill appr">✓ signed</span></div>
+      </div>
+    </div>
+
+    <div class="module rev reveal">
+      <div class="m-copy">
+        <span class="eyebrow">Framework scoring</span>
+        <h3>Readiness you can read at a glance.</h3>
+        <p class="md">See live readiness for SOC 2, GDPR, and the HIPAA Security Rule, scored from real signals across your systems, not a survey filled in once a quarter.</p>
+        <ul class="mlist">
+          <li><span class="tk">▸</span> Real-time scores per framework</li>
+          <li><span class="tk">▸</span> Control-by-control mapping and evidence links</li>
+          <li><span class="tk">▸</span> Upload any regulation or contract to add controls</li>
+        </ul>
+      </div>
+      <div class="m-visual">
+        <div class="mv-head"><span><span class="dotpill"></span>readiness · this org</span><span>updated live</span></div>
+        <div class="scorecard">
+          <div class="srow"><div class="top"><span>SOC 2 Type II</span><b>92%</b></div><div class="meter"><i style="width:92%"></i></div></div>
+          <div class="srow"><div class="top"><span>GDPR</span><b>88%</b></div><div class="meter"><i style="width:88%"></i></div></div>
+          <div class="srow"><div class="top"><span>HIPAA Security Rule</span><b>81%</b></div><div class="meter"><i style="width:81%"></i></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FRAMEWORKS / MODELS RAIL -->
+<section class="rail band-tight" id="frameworks">
+  <div class="wrap grid2">
+    <div class="reveal">
+      <h4>Speaks every major model</h4>
+      <div class="taglist">
+        <span class="tag"><span class="d">◆</span>OpenAI</span>
+        <span class="tag"><span class="d">◆</span>Anthropic</span>
+        <span class="tag"><span class="d">◆</span>Azure OpenAI</span>
+        <span class="tag"><span class="d">◆</span>Cohere</span>
+        <span class="tag"><span class="d">◆</span>AWS Bedrock</span>
+      </div>
+      <h4 style="margin-top:26px">Connects your environment</h4>
+      <div class="taglist">
+        <span class="tag"><span class="d">◇</span>AWS</span>
+        <span class="tag"><span class="d">◇</span>GCP</span>
+        <span class="tag"><span class="d">◇</span>Azure</span>
+        <span class="tag"><span class="d">◇</span>GitHub</span>
+      </div>
+    </div>
+    <div class="reveal">
+      <h4>Maps every framework</h4>
+      <div class="taglist">
+        <span class="tag">SOC 2</span><span class="tag">HIPAA</span><span class="tag">GDPR</span>
+        <span class="tag">ISO 27001</span><span class="tag">ISO 42001</span><span class="tag">NIST AI RMF</span>
+        <span class="tag">EU AI Act</span><span class="tag">PCI DSS</span>
+      </div>
+      <p style="color:var(--slate);font-size:15px;margin-top:18px">Upload any additional regulation or contract, and AuthClaw turns it into controls it can score and enforce.</p>
+    </div>
+  </div>
+</section>
+
+<!-- WHY / COMPARISON -->
+<section class="band" id="why">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="eyebrow">Why AuthClaw</span>
+      <h2>Other tools describe risk. AuthClaw removes it in the path.</h2>
+      <p class="sub">Posture platforms and model-testing tools each cover one slice. AuthClaw is the live layer where enforcement, remediation, and proof come together.</p>
+    </div>
+    <table class="cmp reveal">
+      <thead>
+        <tr><th></th><th>Traditional GRC &amp; AI testing tools</th><th class="us">AuthClaw</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Sensitive data</td><td class="them">Reviewed after the fact</td><td class="us">Removed in real time, before egress</td></tr>
+        <tr><td>Compliance gaps</td><td class="them">Flagged in a report</td><td class="us">Fixed with human approval</td></tr>
+        <tr><td>Audit evidence</td><td class="them">Assembled by hand</td><td class="us">Recorded automatically, tamper-proof</td></tr>
+        <tr><td>AI traffic</td><td class="them">Outside their view</td><td class="us">Inspected on every request</td></tr>
+        <tr><td>Human role</td><td class="them">Doing the work</td><td class="us">Approving the decisions</td></tr>
+      </tbody>
+    </table>
+
+    <div class="quotes">
+      <div class="quote reveal">
+        <div class="mark">”</div>
+        <p>AuthClaw is the first tool that actually sits in the request path. We can show customers that nothing sensitive ever leaves our walls.</p>
+        <div class="who"><b>Head of Security</b><br>Series C healthtech</div>
+      </div>
+      <div class="quote reveal">
+        <div class="mark">”</div>
+        <p>The approval workflow is what sold our board. The agent proposes the change, and a person is always the one who decides.</p>
+        <div class="who"><b>VP Engineering</b><br>Financial services platform</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FINAL CTA -->
+<section class="finalcta" id="demo">
+  <div class="wrap">
+    <span class="eyebrow" style="color:var(--gold)">Get started</span>
+    <h2>Put AuthClaw in front of your models.</h2>
+    <p>See a live redaction, an approved remediation, and a verifiable audit export, in one walkthrough.</p>
+    <div class="cta-row">
+      <a class="btn btn-gold" href="/signup">Book a demo</a>
+      <a class="btn btn-light" href="/login">Log in</a>
+    </div>
+    <div class="appstatus" aria-label="Live app status links">
+      <a class="chip ok" href="/api/lite-health">Health check</a>
+      <a class="chip v" href="/login">Protected console</a>
+      <a class="chip" href="/signup">Tenant onboarding</a>
+    </div>
+    <div class="appgrid" aria-label="AuthClaw application features">
+      <a class="appcard" href="/overview"><b>Overview</b><span>Traffic, redactions, approvals, and readiness.</span></a>
+      <a class="appcard" href="/connect"><b>Connect App</b><span>Create keys, routes, provider credentials, and test calls.</span></a>
+      <a class="appcard" href="/gateway"><b>Gateway</b><span>Manage gateway routes, API keys, and runtime policy.</span></a>
+      <a class="appcard" href="/policies"><b>Policies</b><span>Validate, simulate, activate, and roll back controls.</span></a>
+      <a class="appcard" href="/agent"><b>Agent</b><span>Run remediation sessions with human approval.</span></a>
+      <a class="appcard" href="/audit"><b>Audit</b><span>Review events, export evidence, and verify logs.</span></a>
+      <a class="appcard" href="/evidence"><b>Evidence</b><span>Browse collected compliance proof and records.</span></a>
+      <a class="appcard" href="/findings"><b>Findings</b><span>Track compliance gaps and remediation status.</span></a>
+      <a class="appcard" href="/frameworks"><b>Frameworks</b><span>SOC 2, GDPR, HIPAA, and control scoring.</span></a>
+      <a class="appcard" href="/aws"><b>AWS</b><span>Cloud posture, usage, and connector checks.</span></a>
+      <a class="appcard" href="/settings"><b>Settings</b><span>Users, invites, security, limits, and tenant settings.</span></a>
+      <a class="appcard" href="/signup"><b>Signup</b><span>Create a tenant and receive a gateway key.</span></a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="ft">
+  <div class="wrap">
+    <div class="ft-grid">
+      <div>
+        <div class="brand"><span class="mark"></span>AuthClaw<span class="ai">.ai</span></div>
+        <p class="desc">The runtime layer for AI compliance. Redact in real time, remediate with human approval, and prove it with a tamper-proof trail.</p>
+      </div>
+      <div><h5>Platform</h5><ul>
+        <li><a href="/gateway">In-line gateway</a></li>
+        <li><a href="/agent">Agentic remediation</a></li>
+        <li><a href="/audit">Audit &amp; trust center</a></li>
+        <li><a href="/frameworks">Framework scoring</a></li>
+      </ul></div>
+      <div><h5>Frameworks</h5><ul>
+        <li><a href="/frameworks">SOC 2</a></li><li><a href="/frameworks">HIPAA</a></li>
+        <li><a href="/frameworks">GDPR</a></li><li><a href="/frameworks">ISO 42001</a></li>
+        <li><a href="/frameworks">EU AI Act</a></li>
+      </ul></div>
+      <div><h5>Company</h5><ul>
+        <li><a href="#why">About</a></li><li><a href="/settings">Users</a></li>
+        <li><a href="/settings">Security</a></li><li><a href="/signup">Contact</a></li>
+      </ul></div>
+      <div><h5>Resources</h5><ul>
+        <li><a href="/connect">Docs</a></li><li><a href="/overview">Dashboard</a></li>
+        <li><a href="/audit">Trust center</a></li><li><a href="/signup">Book a demo</a></li>
+      </ul></div>
+    </div>
+    <div class="ft-base">
+      <span>© 2026 AuthClaw. All rights reserved.</span>
+      <span class="made">A product by <b>AgentsArchitects.ai</b></span>
+    </div>
+  </div>
+</footer>
+
+<script>
+// mobile menu
+var burger=document.getElementById('burger'),mm=document.getElementById('mm');
+if(burger){burger.addEventListener('click',function(){mm.classList.toggle('open')});
+  mm.querySelectorAll('a').forEach(function(a){a.addEventListener('click',function(){mm.classList.remove('open')})});}
+
+// scroll reveal
+var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}})},{threshold:.14});
+document.querySelectorAll('.reveal').forEach(function(el){io.observe(el)});
+
+// hero redaction loop
+(function(){
+  var reduce=window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+  if(reduce)return;
+  var reals=document.querySelectorAll('#inNode .pii');
+  var lat=document.getElementById('lat');
+  var lats=['+38ms','+41ms','+36ms','+44ms','+39ms'];
+  var i=0;
+  setInterval(function(){
+    reals.forEach(function(el){el.classList.add('masked');el.textContent='••••••'});
+    setTimeout(function(){
+      reals.forEach(function(el){el.classList.remove('masked');el.textContent=el.getAttribute('data-real')});
+    },1400);
+    lat.textContent=lats[i++%lats.length];
+  },3200);
+})();
+</script>
+</body>
+</html>
