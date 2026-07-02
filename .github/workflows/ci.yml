@@ -287,6 +287,10 @@ jobs:
         working-directory: console
         run: npx tsc --noEmit --pretty false
 
+      - name: Session store security test
+        working-directory: console
+        run: npm run test:session-store
+
       - name: Build
         working-directory: console
         run: npm run build
@@ -294,6 +298,7 @@ jobs:
           API_URL: http://localhost:8000
           NEXT_PUBLIC_GATEWAY_URL: http://localhost:8080
           NEXT_PUBLIC_AUTHCLAW_DEMO_MODE: "true"
+          SESSION_SECRET: ci-console-session-secret
 
   integration-and-benchmark:
     name: Full Stack Integration and Benchmark Gate

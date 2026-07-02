@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start -p 3001",
     "lint": "eslint",
+    "test:session-store": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/session-store.test.mts",
     "postinstall": "node scripts/patch-next-picomatch.mjs"
   },
   "dependencies": {

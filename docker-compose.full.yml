@@ -257,6 +257,7 @@ services:
       NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:8080}
       NEXT_PUBLIC_AUTHCLAW_DEMO_MODE: "false"
       AUTHCLAW_COOKIE_SECURE: ${AUTHCLAW_COOKIE_SECURE:-false}
+      SESSION_SECRET: ${SESSION_SECRET:-authclaw-full-local-session-secret}
       NODE_ENV: production
     ports:
       - "${CONSOLE_PORT:-3001}:3001"

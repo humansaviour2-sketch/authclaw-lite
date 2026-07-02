@@ -27,9 +27,11 @@ The real gap is no longer "missing big modules." The gap is hardening the module
 - Add a concurrency test that fires parallel `persistAuditMetadata` writes and verifies a single valid chain.
 - Make chain verification part of CI for gateway audit writes, not only backend export tests.
 
-### 2. Stop storing raw gateway API keys in console session files
+### 2. Stop storing raw gateway API keys in console session files - DONE
 
 **Why:** Console login stores the raw API key server-side so API routes can proxy to backend/gateway. The cookie does not expose the key, but `console/src/lib/session-store.ts` writes `apiKey` into a JSON session file. That is too soft for NFR-2.2 secret management.
+
+**Status:** Implemented on `codex-audit-chain-hardening`. Console sessions now encrypt gateway API keys at rest with AES-256-GCM using `SESSION_SECRET`, store only `credentialCiphertext` in the JSON session file, decrypt only inside server-side session reads, and auto-migrate legacy plaintext session files on read. Compose now passes `SESSION_SECRET` into the console container, and a Node test proves stored sessions do not contain plaintext `acl_` keys.
 
 **Evidence:**
 - `console/src/app/api/auth/login/route.ts` creates a session with `apiKey`.
