@@ -195,6 +195,7 @@ jobs:
           tests/test_compliance_scoring.py
           tests/test_ephemeral_workers.py
           tests/test_event_backbone.py
+          tests/test_phase10.py::test_phase10_production_approval_requires_mfa_enrollment
           tests/test_policy_engine.py
           tests/test_rag_service.py
           tests/test_secret_crypto.py

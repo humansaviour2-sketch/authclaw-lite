@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_tenant_db, require_scopes
+from app.core.startup_checks import is_production
 from app.db.models import PendingApproval, ComplianceWorkflow, User, ApprovalAudit
 from app.orchestrator.runner import ComplianceWorkflowRunner
 from datetime import datetime, timezone
@@ -192,13 +193,16 @@ def _verify_mfa_if_enabled(
     """Shared MFA verification for all HITL approval endpoints.
 
     Returns (mfa_verified, mfa_timestamp).
-    Raises HTTPException if the user has MFA enabled but the supplied code is
-    missing or invalid.  Users who have NOT set up MFA are allowed through
-    (mfa_verified=False) so that the feature does not break for tenants that
-    have not yet configured TOTP.
+    Raises HTTPException if production approval execution is attempted without
+    enrolled MFA, or if an enrolled user's supplied code is missing or invalid.
     """
     if not (user.mfa_enabled and user.mfa_secret):
-        # MFA not configured for this user — allow through without verification
+        # Local/demo can approve before enrollment; production requires MFA setup first.
+        if is_production():
+            raise HTTPException(
+                status_code=403,
+                detail="MFA enrollment required before approving workflows in production",
+            )
         return False, None
 
     # Collect TOTP code from body → query param → header (in that priority order)

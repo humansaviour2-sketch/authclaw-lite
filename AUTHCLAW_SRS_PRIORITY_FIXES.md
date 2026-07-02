@@ -43,9 +43,11 @@ The real gap is no longer "missing big modules." The gap is hardening the module
 - Better path: issue a backend session token and stop proxying with the original gateway API key.
 - Add a test that session storage never contains the plaintext `acl_` key.
 
-### 3. Enforce MFA for production approval execution
+### 3. Enforce MFA for production approval execution - DONE
 
 **Why:** SRS FR-2.3 says human approval with MFA on execution. Current code verifies TOTP/backup code only if the user already has MFA enabled; users without MFA can approve.
+
+**Status:** Implemented on `codex-audit-chain-hardening`. HITL approval execution now rejects no-MFA approvers in `AUTHCLAW_ENV=production` before mutating approval state. Local/demo behavior remains permissive for setup flows, and tests cover both production rejection and local allowance.
 
 **Evidence:**
 - `backend/app/api/v1/endpoints/workflows.py` `_verify_mfa_if_enabled` allows approval when MFA is not configured.

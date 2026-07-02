@@ -2,7 +2,7 @@ import uuid
 import pytest
 import pyotp
 from fastapi.testclient import TestClient
-from fastapi import status
+from fastapi import HTTPException, status
 from sqlalchemy import text, create_engine
 from sqlalchemy.orm import sessionmaker, Session
 
@@ -11,6 +11,7 @@ from app.db.dependencies import get_db
 from app.db.models import Tenant, User, APIKey, PendingApproval, ApprovalAudit
 from app.core.auth import hash_key
 from app.core.config import settings
+from app.api.v1.endpoints.workflows import _verify_mfa_if_enabled
 
 db_url = settings.DATABASE_URL.replace("authclaw:authclaw@", "authclaw_app:authclaw@")
 engine = create_engine(db_url, echo=False)
@@ -145,6 +146,20 @@ def test_phase10_mfa_setup_and_verification(client: TestClient, db_session: Sess
     assert audit.mfa_verified is True
     assert audit.actor_id == user_id
     db_session.execute(text("SET app.current_tenant_id = ''"))
+
+
+def test_phase10_production_approval_requires_mfa_enrollment(monkeypatch):
+    """No-MFA approvers are blocked only in production."""
+    user = User(email="admin@example.com", role="admin", is_active=True, mfa_enabled=False)
+
+    monkeypatch.setenv("AUTHCLAW_ENV", "production")
+    with pytest.raises(HTTPException) as exc:
+        _verify_mfa_if_enabled(user, request=None, body=None)
+    assert exc.value.status_code == status.HTTP_403_FORBIDDEN
+    assert "MFA enrollment required" in exc.value.detail
+
+    monkeypatch.setenv("AUTHCLAW_ENV", "local")
+    assert _verify_mfa_if_enabled(user, request=None, body=None) == (False, None)
 
 
 def test_phase10_approval_expiration(client: TestClient, db_session: Session):
