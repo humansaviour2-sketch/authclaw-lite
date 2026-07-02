@@ -195,6 +195,9 @@ func KafkaMetricsHandler(w http.ResponseWriter, _ *http.Request) {
 	for name, value := range KafkaMetricsSnapshot() {
 		fmt.Fprintf(w, "# TYPE %s counter\n%s %d\n", name, name, value)
 	}
+	for name, value := range AuditMetricsSnapshot() {
+		fmt.Fprintf(w, "# TYPE %s counter\n%s %d\n", name, name, value)
+	}
 	for name, value := range RedactionMetricsSnapshot() {
 		fmt.Fprintf(w, "# TYPE %s counter\n%s %d\n", name, name, value)
 	}

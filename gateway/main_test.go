@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,11 +11,7 @@ import (
 
 func TestHealthCheck(t *testing.T) {
 	r := chi.NewRouter()
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status": "healthy", "service": "authclaw-gateway"}`))
-	})
+	r.Get("/health", HealthHandler)
 
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
@@ -30,8 +27,20 @@ func TestHealthCheck(t *testing.T) {
 		t.Errorf("Expected Content-Type %q, got %q", expectedContentType, contentType)
 	}
 
-	expectedBody := `{"status": "healthy", "service": "authclaw-gateway"}`
-	if w.Body.String() != expectedBody {
-		t.Errorf("Expected body %q, got %q", expectedBody, w.Body.String())
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid health JSON: %v", err)
+	}
+	if body["status"] != "healthy" {
+		t.Errorf("Expected healthy status, got %v", body["status"])
+	}
+	if body["service"] != "authclaw-gateway" {
+		t.Errorf("Expected service authclaw-gateway, got %v", body["service"])
+	}
+	if _, ok := body["audit_fail_closed"].(bool); !ok {
+		t.Errorf("Expected audit_fail_closed boolean, got %T", body["audit_fail_closed"])
+	}
+	if body["audit_outbox_path"] == "" {
+		t.Errorf("Expected audit_outbox_path to be set")
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -9,6 +10,17 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/joho/godotenv"
 )
+
+func HealthHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":            "healthy",
+		"service":           "authclaw-gateway",
+		"audit_fail_closed": auditFailClosedEnabled(),
+		"audit_outbox_path": auditOutboxPath(),
+	})
+}
 
 func main() {
 	// Try to load .env.local from parent directory
@@ -32,11 +44,7 @@ func main() {
 	r.Use(middleware.Recoverer)
 
 	// Basic health check endpoint
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status": "healthy", "service": "authclaw-gateway"}`))
-	})
+	r.Get("/health", HealthHandler)
 	r.Get("/metrics", KafkaMetricsHandler)
 
 	// Setup LLM provider reverse proxy

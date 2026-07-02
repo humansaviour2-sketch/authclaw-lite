@@ -6,9 +6,14 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lib/pq"
@@ -33,23 +38,97 @@ type AuditEvent struct {
 	ExecutionTrace     []string  `json:"execution_trace,omitempty"`
 }
 
-// EmitAuditEvent publishes the event to Kafka when the producer is initialised,
-// and falls back to a structured stdout log if Kafka is unavailable.
-// The function is intentionally non-blocking; failures are logged and swallowed.
-func EmitAuditEvent(event *AuditEvent) {
-	persistAuditMetadata(event)
+var (
+	auditPostgresFailures   atomic.Uint64
+	auditOutboxWrites       atomic.Uint64
+	auditOutboxFailures     atomic.Uint64
+	auditFailClosedFailures atomic.Uint64
+	auditOutboxMu           sync.Mutex
+)
+
+type auditOutboxEnvelope struct {
+	FailedAt    time.Time   `json:"failed_at"`
+	ErrorReason string      `json:"error_reason"`
+	Event       *AuditEvent `json:"event"`
+}
+
+func auditFailClosedEnabled() bool {
+	return envBool("AUDIT_FAIL_CLOSED", isProductionEnv())
+}
+
+func auditOutboxPath() string {
+	if path := strings.TrimSpace(os.Getenv("AUDIT_OUTBOX_PATH")); path != "" {
+		return path
+	}
+	return filepath.Join(os.TempDir(), "authclaw", "audit-outbox.ndjson")
+}
+
+func writeAuditOutbox(event *AuditEvent, reason error) error {
+	if event == nil {
+		return fmt.Errorf("audit event is nil")
+	}
+	envelope := auditOutboxEnvelope{
+		FailedAt:    time.Now().UTC(),
+		ErrorReason: reason.Error(),
+		Event:       event,
+	}
+	payload, err := json.Marshal(envelope)
+	if err != nil {
+		return err
+	}
+	path := auditOutboxPath()
+	auditOutboxMu.Lock()
+	defer auditOutboxMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(append(payload, '\n')); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	auditOutboxWrites.Add(1)
+	return nil
+}
+
+// EmitAuditEvent records the event in Postgres, queues to a local outbox when
+// Postgres is unavailable, then publishes to Kafka/stdout for analytics.
+func EmitAuditEvent(event *AuditEvent) error {
+	if err := persistAuditMetadata(event); err != nil {
+		auditPostgresFailures.Add(1)
+		log.Printf("[AUDIT] Postgres metadata persistence failed: %v", err)
+		if outboxErr := writeAuditOutbox(event, err); outboxErr != nil {
+			auditOutboxFailures.Add(1)
+			log.Printf("[AUDIT] Durable outbox write failed: %v", outboxErr)
+			if auditFailClosedEnabled() {
+				auditFailClosedFailures.Add(1)
+				return fmt.Errorf("audit persistence failed and outbox unavailable: %w", outboxErr)
+			}
+		}
+	}
 
 	// Attempt Kafka publish first.
 	if err := PublishAuditEvent(event); err != nil {
 		log.Printf("[AUDIT] Kafka serialisation error: %v — falling back to stdout", err)
 		logToStdout(event)
-		return
+		return nil
 	}
 
 	// If kafkaWriter is nil (not configured), also log to stdout as fallback.
 	if kafkaWriter == nil {
 		logToStdout(event)
 	}
+	return nil
 }
 
 // logToStdout emits a structured JSON audit log to stdout.
@@ -116,9 +195,21 @@ func hashAuditEvent(event *AuditEvent, priorHash string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func persistAuditMetadata(event *AuditEvent) {
-	if event == nil || DB == nil || event.TenantID == "" || event.ID == "" {
-		return
+func persistAuditMetadata(event *AuditEvent) error {
+	if event == nil {
+		return fmt.Errorf("audit event is nil")
+	}
+	if event.TenantID == "" || event.ID == "" {
+		if !auditFailClosedEnabled() {
+			return nil
+		}
+		return fmt.Errorf("audit event missing tenant_id or id")
+	}
+	if DB == nil {
+		if auditFailClosedEnabled() {
+			return fmt.Errorf("database is not initialized")
+		}
+		return nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -196,6 +287,16 @@ func persistAuditMetadata(event *AuditEvent) {
 		return err
 	})
 	if err != nil {
-		log.Printf("[AUDIT] Postgres metadata fallback failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+func AuditMetricsSnapshot() map[string]uint64 {
+	return map[string]uint64{
+		"authclaw_gateway_audit_postgres_failures_total":    auditPostgresFailures.Load(),
+		"authclaw_gateway_audit_outbox_writes_total":        auditOutboxWrites.Load(),
+		"authclaw_gateway_audit_outbox_failures_total":      auditOutboxFailures.Load(),
+		"authclaw_gateway_audit_fail_closed_failures_total": auditFailClosedFailures.Load(),
 	}
 }

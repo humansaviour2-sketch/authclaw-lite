@@ -156,6 +156,8 @@ services:
       AWS_ENABLED: ${AWS_ENABLED:-false}
       BEDROCK_ENABLED: ${BEDROCK_ENABLED:-false}
       AUTHCLAW_ENV: ${AUTHCLAW_ENV:-demo}
+      AUDIT_FAIL_CLOSED: ${AUDIT_FAIL_CLOSED:-false}
+      AUDIT_OUTBOX_PATH: /var/lib/authclaw-gateway/audit-outbox.ndjson
       GATEWAY_RATE_LIMIT_ENABLED: ${GATEWAY_RATE_LIMIT_ENABLED:-true}
       GATEWAY_RATE_LIMIT_PER_MINUTE: ${GATEWAY_RATE_LIMIT_PER_MINUTE:-30}
       GATEWAY_RATE_LIMIT_BURST_10S: ${GATEWAY_RATE_LIMIT_BURST_10S:-10}
@@ -163,6 +165,8 @@ services:
       GATEWAY_MAX_BODY_BYTES: ${GATEWAY_MAX_BODY_BYTES:-131072}
     ports:
       - "${GATEWAY_PORT:-8080}:8080"
+    volumes:
+      - demo_gateway_audit_outbox:/var/lib/authclaw-gateway
 
   console:
     build:
@@ -193,3 +197,4 @@ services:
 
 volumes:
   demo_postgres_data:
+  demo_gateway_audit_outbox:

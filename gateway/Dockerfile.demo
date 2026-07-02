@@ -9,7 +9,7 @@ RUN go build -o /out/authclaw-gateway .
 
 FROM alpine:3.20
 WORKDIR /app
-RUN addgroup -S authclaw && adduser -S -G authclaw authclaw
+RUN addgroup -S authclaw && adduser -S -G authclaw authclaw && mkdir -p /var/lib/authclaw-gateway && chown -R authclaw:authclaw /var/lib/authclaw-gateway
 COPY --from=build --chown=authclaw:authclaw /out/authclaw-gateway /app/authclaw-gateway
 
 EXPOSE 8080

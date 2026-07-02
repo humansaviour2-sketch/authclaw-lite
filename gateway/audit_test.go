@@ -2,8 +2,10 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +28,59 @@ func TestEmitAuditEvent(t *testing.T) {
 
 	// Make sure it runs and serializes without errors
 	EmitAuditEvent(event)
+}
+
+func TestEmitAuditEvent_WritesOutboxWhenFailClosedAndDatabaseUnavailable(t *testing.T) {
+	originalDB := DB
+	DB = nil
+	t.Cleanup(func() { DB = originalDB })
+	t.Setenv("AUTHCLAW_ENV", "production")
+	t.Setenv("AUDIT_FAIL_CLOSED", "true")
+	outboxPath := filepath.Join(t.TempDir(), "audit-outbox.ndjson")
+	t.Setenv("AUDIT_OUTBOX_PATH", outboxPath)
+
+	event := &AuditEvent{
+		ID:             "11111111-1111-4111-8111-111111111111",
+		RequestID:      "req-outbox",
+		Timestamp:      time.Now(),
+		TenantID:       "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		Action:         "allow",
+		DecisionReason: "outbox test",
+	}
+
+	if err := EmitAuditEvent(event); err != nil {
+		t.Fatalf("EmitAuditEvent returned error with durable outbox available: %v", err)
+	}
+	data, err := os.ReadFile(outboxPath)
+	if err != nil {
+		t.Fatalf("read outbox: %v", err)
+	}
+	var envelope auditOutboxEnvelope
+	if err := json.Unmarshal(data[:len(data)-1], &envelope); err != nil {
+		t.Fatalf("unmarshal outbox envelope: %v", err)
+	}
+	if envelope.Event == nil || envelope.Event.RequestID != "req-outbox" {
+		t.Fatalf("unexpected outbox event: %+v", envelope.Event)
+	}
+}
+
+func TestEmitAuditEvent_FailClosedWhenOutboxUnavailable(t *testing.T) {
+	originalDB := DB
+	DB = nil
+	t.Cleanup(func() { DB = originalDB })
+	t.Setenv("AUTHCLAW_ENV", "production")
+	t.Setenv("AUDIT_FAIL_CLOSED", "true")
+	t.Setenv("AUDIT_OUTBOX_PATH", t.TempDir())
+
+	err := EmitAuditEvent(&AuditEvent{
+		ID:        "22222222-2222-4222-8222-222222222222",
+		TenantID:  "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		Timestamp: time.Now(),
+		Action:    "allow",
+	})
+	if err == nil {
+		t.Fatalf("expected fail-closed error when Postgres and outbox are unavailable")
+	}
 }
 
 func TestAuditEventMetadataConcurrentHashChain(t *testing.T) {

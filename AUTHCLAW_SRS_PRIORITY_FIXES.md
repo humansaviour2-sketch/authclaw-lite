@@ -58,9 +58,11 @@ The real gap is no longer "missing big modules." The gap is hardening the module
 - Add an admin/setup path that forces owner/admin MFA enrollment before approval privileges.
 - Add tests for: no-MFA admin in production cannot approve; no-MFA in local demo may still pass if explicitly configured.
 
-### 4. Make gateway audit persistence fail-closed or durable-queued
+### 4. Make gateway audit persistence fail-closed or durable-queued - DONE
 
 **Why:** Gateway runtime decisions are the core SRS audit surface. `EmitAuditEvent` logs Postgres persistence errors and continues; Kafka publish errors are counted/logged. For regulated mode, a request that cannot be recorded should fail or enter a durable local outbox.
+
+**Status:** Implemented on `codex-audit-chain-hardening`. Gateway audit writes now return persistence errors, queue events to a synchronous local NDJSON outbox when Postgres is unavailable, and fail closed when both Postgres and the outbox are unavailable under `AUDIT_FAIL_CLOSED=true` or production defaults. Audit fallback/fail-closed counters are exposed in `/metrics`, and `/health` reports audit mode/outbox path.
 
 **Evidence:**
 - `gateway/audit.go` comments say audit emit failures are "logged and swallowed."
