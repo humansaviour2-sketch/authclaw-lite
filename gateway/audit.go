@@ -121,25 +121,39 @@ func persistAuditMetadata(event *AuditEvent) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	err := RunInTenantTx(ctx, event.TenantID, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", event.TenantID); err != nil {
+			return err
+		}
+
 		priorHash := auditGenesisHash
+		var priorCreatedAt sql.NullTime
 		if err := tx.QueryRowContext(ctx, `
-			SELECT COALESCE(integrity_hash, '')
+			SELECT COALESCE(integrity_hash, ''), created_at
 			FROM audit_log_metadata
 			WHERE tenant_id = $1
 			  AND COALESCE(integrity_hash, '') <> ''
 			ORDER BY created_at DESC, record_id DESC
 			LIMIT 1
-		`, event.TenantID).Scan(&priorHash); err != nil && err != sql.ErrNoRows {
+		`, event.TenantID).Scan(&priorHash, &priorCreatedAt); err != nil && err != sql.ErrNoRows {
 			return err
 		}
 		if priorHash == "" {
 			priorHash = auditGenesisHash
 		}
-		integrityHash := hashAuditEvent(event, priorHash)
+		chainTimestamp := event.Timestamp.UTC()
+		if chainTimestamp.IsZero() {
+			chainTimestamp = time.Now().UTC()
+		}
+		if priorCreatedAt.Valid && !chainTimestamp.After(priorCreatedAt.Time) {
+			chainTimestamp = priorCreatedAt.Time.Add(time.Microsecond)
+		}
+		eventForHash := *event
+		eventForHash.Timestamp = chainTimestamp
+		integrityHash := hashAuditEvent(&eventForHash, priorHash)
 		executionTrace := "[]"
 		if len(event.ExecutionTrace) > 0 {
 			if traceBytes, traceErr := json.Marshal(event.ExecutionTrace); traceErr == nil {
@@ -173,7 +187,7 @@ func persistAuditMetadata(event *AuditEvent) {
 			event.ResponseStatus,
 			event.DurationMs,
 			pq.Array(event.FrameworksAffected),
-			event.Timestamp,
+			chainTimestamp,
 			priorHash,
 			integrityHash,
 			"gateway",
