@@ -595,7 +595,7 @@ func fallbackAnalyze(text string, customRules []RegexRule) []AnalyzeResult {
 		{"US_SSN", regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`)},
 		{"PHONE_NUMBER", regexp.MustCompile(`(?i)(?:\+?\d[\d\s().-]{7,}\d)`)},
 		{"HEALTH_DATA", regexp.MustCompile(`(?i)\b(patient|diagnosed|treatment|prescription|symptoms|medical|disease|hospital|doctor|clinic)\b`)},
-		{"PERSON", regexp.MustCompile(`(?i)\b(?:my name is|name is|patient|manager|supervisor|reported to|managed by)\s*:?\s*([A-Z][a-z]+ [A-Z][a-z]+)\b`)},
+		{"PERSON", regexp.MustCompile(`(?i)\b(?:my name is|name is|patient|manager|supervisor|reported to|managed by|call|contact|email|text)\s*:?\s*([A-Z][a-z]+ [A-Z][a-z]+)\b`)},
 	}
 
 	for _, item := range builtIns {
