@@ -261,6 +261,22 @@ jobs:
         run: |
           go test ./... -run 'Test(PayloadFidelityContract|ExtractAndNormalize|ProviderRouteValidation|ApplyProviderCredentialHeaders|AzureOpenAIRequiresTenantProviderCredential|HITLTimeoutUses|PublishAuditEvent|EmitAuditEvent|AuditEvent|DLQMessage|PublishToDLQ|ValidatePolicyYAML|NormalizeDetected|StaticReversalReader|StreamingReversalReader|AnalyzePrompt|FallbackAnalyze|PresidioAnalyze|HashStrategy|SecretEnvelope|ValidateEnvelope|HealthCheck)' -count=1
 
+  sdk-tests:
+    name: Python SDK Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Run install-free SDK tests
+        run: python -m unittest discover -s sdk/python -p "test_*.py"
+
   console-tests:
     name: Console Lint, Typecheck, Build
     runs-on: ubuntu-latest
@@ -394,6 +410,7 @@ jobs:
       - backend-tests
       - audit-consumer-tests
       - gateway-tests
+      - sdk-tests
       - console-tests
       - integration-and-benchmark
     strategy:

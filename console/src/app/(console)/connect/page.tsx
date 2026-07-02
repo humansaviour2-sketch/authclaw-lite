@@ -194,6 +194,28 @@ export default function ConnectPage() {
   -d '${selected.body.replace(/'/g, "'\\''")}'`;
   }, [gatewayUrl, selected]);
 
+  const pythonSdkSnippet = useMemo(() => {
+    const payload = selected.body
+      .split("\n")
+      .map((line, index) => (index === 0 ? line : `        ${line}`))
+      .join("\n");
+
+    return `from authclaw_lite import AuthClaw
+
+client = AuthClaw(
+    api_key="<AUTHCLAW_GATEWAY_KEY>",
+    gateway_url="${gatewayUrl}",
+)
+
+response = client.request(
+    path="${selected.path}",
+    provider="${provider}",
+    request_id="demo-001",
+    payload=${payload},
+)
+print(response)`;
+  }, [gatewayUrl, provider, selected]);
+
   const copy = async (id: string, value: string) => {
     await copyTextToClipboard(value);
     setCopied(id);
@@ -800,6 +822,30 @@ export default function ConnectPage() {
         </div>
         <pre className="p-5 overflow-x-auto text-xs text-slate-200 bg-[#07070a]">
           <code>{curlCommand}</code>
+        </pre>
+      </section>
+
+      <section className="rounded-lg bg-[#09090d] border border-slate-800 overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-white font-bold text-sm">
+              <Code2 className="w-4 h-4 text-indigo-400" />
+              Python SDK Request
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              Install-free helper from <code>sdk/python/authclaw_lite.py</code>.
+            </p>
+          </div>
+          <button
+            onClick={() => copy("python-sdk", pythonSdkSnippet)}
+            className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white"
+          >
+            {copied === "python-sdk" ? <Check className="w-4 h-4" /> : <Clipboard className="w-4 h-4" />}
+            Copy Python
+          </button>
+        </div>
+        <pre className="p-5 overflow-x-auto text-xs text-slate-200 bg-[#07070a]">
+          <code>{pythonSdkSnippet}</code>
         </pre>
       </section>
 

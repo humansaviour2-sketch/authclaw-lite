@@ -95,7 +95,7 @@ The real gap is no longer "missing big modules." The gap is hardening the module
 - CI benchmarks now use the mock provider baseline URL, gate allow/block overhead p95 at 50ms, and gate redaction/streaming overhead separately.
 - Block/HITL scenarios are treated as gateway-only overhead because they should not call the provider.
 
-### 6. Ship a minimal SDK/developer experience package
+### 6. Ship a minimal SDK/developer experience package - DONE
 
 **Why:** The comparison marks SDK/DX as missing. SRS fit improves a lot if users can route traffic through AuthClaw without hand-copying curl snippets.
 
@@ -107,6 +107,11 @@ The real gap is no longer "missing big modules." The gap is hardening the module
 - Add `sdk/python/authclaw_lite.py` with one tiny client: `chat_completions.create(...)` forwarding to the gateway with the AuthClaw API key.
 - Include install-free usage first: a single file and one test using the mock provider.
 - Add generated snippets in console to show Python SDK next to curl.
+
+**Implemented:**
+- Added install-free `sdk/python/authclaw_lite.py` with `AuthClaw(...).chat_completions.create(...)` and a generic `request(...)` helper for Gemini/Anthropic/Cohere routes.
+- Added `sdk/python/test_authclaw_lite.py` using a local mock gateway and a CI `sdk-tests` hard gate.
+- Added `sdk/python/README.md` usage and a copyable Python SDK snippet beside the Connect page curl snippet.
 
 ### 7. Prove trust center end-to-end in CI
 
